@@ -1,13 +1,11 @@
-import "AgentUI" as UI;
-
 void Main() {
     startnew(OnLoop, 0);
 }
 
 void OnLoop() {
     while (true) {
-        UI::RenderMenu();
-        UI::Render();
+        AgentUI::RenderMenu();
+        AgentUI::Render();
         yield();
     }
 }
