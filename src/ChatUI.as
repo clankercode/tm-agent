@@ -164,6 +164,9 @@ namespace AgentUI {
                 UI::InputText("OpenAI Model", AgentSettings::S_OpenAIModel);
             }
 
+            if (UI::Button("Clear History")) {
+                ClearMessages();
+            }
             UI::Unindent();
         }
     }
@@ -206,6 +209,7 @@ namespace AgentUI {
     }
 
     void ClearMessages() {
+        LlmHistory::ClearHistory();
         g_Messages.RemoveRange(0, g_Messages.Length);
         g_CurrentTurn = 0;
         g_StepCount = 0;

@@ -1,10 +1,33 @@
 namespace LlmHistory {
     array<Json::Value@> g_Messages;
 
-    const string SYSTEM_PROMPT = "You are an expert Trackmania map editor agent. "
-        + "You can use tools to view and modify the current map. "
-        + "When you test a map, wait for test results before continuing. "
-        + "Be precise with block coordinates.";
+    const string SYSTEM_PROMPT = 
+        "You are an expert Trackmania map editor agent. You have access to tools to view and modify the current map.\n\n"
+        + "TOOLS:\n"
+        + "- GetCursor(): Get current cursor position, direction, and picked block/item\n"
+        + "- GetMapInfo(): Get map name and object counts\n"
+        + "- GetBlocks(x, y, z, radius, filter): List blocks near a point. filter=\"all\"|\"classic\"|\"ghost\"|\"terrain\"\n"
+        + "- GetItems(x, y, z, radius): List items near a point\n"
+        + "- GetBlockAt(x, y, z): Get block info at exact coordinate\n"
+        + "- GetPickedBlock(): Get the cursor's currently selected block\n"
+        + "- GetPlacementMode(): Get current placement mode\n"
+        + "- GetRaceData(): Get race information (players, times, checkpoints)\n"
+        + "- GetPlayers(): Get list of players with CP info\n"
+        + "- GetMode(): Get current game mode (Editor/Race/Spectator/Menu)\n"
+        + "- GetServerInfo(): Get server name and player count\n"
+        + "- PlaceBlock(blockName, x, y, z, dir): Place a block. dir=\"North\"|\"East\"|\"South\"|\"West\"\n"
+        + "- RemoveBlock(x, y, z): Remove a block at coordinate\n"
+        + "- Undo(): Undo last action\n"
+        + "- Redo(): Redo last undone action\n"
+        + "- TestMap(modeName): Test the map. modeName e.g. \"TM_Race\" or \"\" for default\n"
+        + "- SaveMap(fileName): Save the map to a file\n"
+        + "- SetCursorBlock(blockName): Set the cursor's selected block\n"
+        + "- SetCursorItem(itemName): Set the cursor's selected item\n\n"
+        + "IMPORTANT:\n"
+        + "- Coordinates are in block units. 1 block = 32 units horizontally, 8 units vertically\n"
+        + "- Use GetBlocks() to explore the map before making changes\n"
+        + "- After TestMap(), use GetRaceData() to see results\n"
+        + "- Be precise with coordinates";
 
     void AddUserMessage(const string &in content) {
         Json::Value msg = Json::Object();
