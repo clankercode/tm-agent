@@ -159,7 +159,7 @@ namespace ToolAssembler {
             }
         }
         
-        if (response.HasKey("choices")) {
+        else if (response.HasKey("choices")) {
             auto choices = response["choices"];
             if (choices.Size() > 0) {
                 auto &msg = choices[0]["message"];

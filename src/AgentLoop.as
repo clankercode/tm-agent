@@ -133,7 +133,7 @@ void ProcessToolCalls() {
         }
 
         AgentUI::AddToolResult(name, Json::Stringify(actualResult));
-        LlmHistory::AddToolResult(toolCallId, name, Json::Stringify(actualResult));
+        // LlmHistory::AddToolResult(toolCallId, name, Json::Stringify(actualResult));
     }
 
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);

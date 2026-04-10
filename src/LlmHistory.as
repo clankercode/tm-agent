@@ -72,7 +72,7 @@ namespace LlmHistory {
     }
 
     void TruncateHistory(int maxTokens) {
-        while (g_Messages.Length > 1 && CountAllTokens() > maxTokens) {
+        while (g_Messages.Length > 20 && CountAllTokens() > maxTokens) {
             g_Messages.RemoveAt(0);
         }
     }
