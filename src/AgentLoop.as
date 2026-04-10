@@ -106,8 +106,8 @@ void ProcessToolCalls() {
                 if (pollResult.HasKey("status")) {
                     string status = pollResult["status"];
                     if (status == "done") {
-                        if (pollResult.HasKey("data")) {
-                            actualResult = pollResult["data"];
+                        if (pollResult.HasKey("result")) {
+                            actualResult = pollResult["result"];
                         } else {
                             actualResult = Json::Object();
                             actualResult["result"] = "done";
