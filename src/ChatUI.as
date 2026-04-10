@@ -6,6 +6,7 @@ namespace AgentUI {
     vec2 g_WindowPos = vec2(50, 50);
     string g_InputText = "";
     int g_CurrentTurn = 0;
+    int g_StepCount = 0;
     string g_Status = "Idle";
 
     enum MsgType { User, Assistant, ToolCall, ToolResult, System }
@@ -46,15 +47,27 @@ namespace AgentUI {
     }
 
     void DrawHeader() {
-        UI::Text("Turn " + g_CurrentTurn);
-        UI::SameLine();
+        if (g_Status.StartsWith("Error:")) {
+            UI::TextColored(vec4(1, 0, 0, 1), "Turn " + g_CurrentTurn + "." + g_StepCount);
+            UI::SameLine();
+            UI::TextColored(vec4(1, 0, 0, 1), g_Status);
+        } else {
+            UI::Text("Turn " + g_CurrentTurn + "." + g_StepCount);
+            UI::SameLine();
 
-        if (g_Status == "Idle") {
-            UI::TextColored(vec4(0, 1, 0, 1), "[Idle]");
-        } else if (g_Status == "Running") {
-            UI::TextColored(vec4(1, 1, 0, 1), "[Running]");
-        } else if (g_Status == "Error") {
-            UI::TextColored(vec4(1, 0, 0, 1), "[Error]");
+            if (g_Status == "Idle") {
+                UI::TextColored(vec4(0, 1, 0, 1), "[Idle]");
+            } else if (g_Status == "Running" || g_Status == "Calling LLM...") {
+                UI::TextColored(vec4(1, 1, 0, 1), "[" + g_Status + "]");
+                UI::SameLine();
+                int dotCount = (Time::Now / 300) % 4;
+                string dots = "";
+                for (int i = 0; i < dotCount; i++) dots += ".";
+                for (int i = dotCount; i < 3; i++) dots += " ";
+                UI::TextDisabled(dots);
+            } else {
+                UI::TextColored(vec4(1, 0, 0, 1), "[" + g_Status + "]");
+            }
         }
 
         UI::SameLine();
@@ -74,6 +87,7 @@ namespace AgentUI {
             DrawMessage(msg);
         }
 
+        UI::SetScrollHereY(1.0f);
         UI::EndChild();
     }
 
@@ -157,9 +171,14 @@ namespace AgentUI {
     void SendMessage(const string &in text) {
         AddMessage(MsgType::User, text);
         g_CurrentTurn++;
+        g_StepCount = 1;
         g_Status = "Running";
 
         startnew(SendMessageCoro, text);
+    }
+
+    void IncrementStep() {
+        g_StepCount++;
     }
 
     void SendMessageCoro(const string &in text) {
@@ -189,6 +208,7 @@ namespace AgentUI {
     void ClearMessages() {
         g_Messages.RemoveRange(0, g_Messages.Length);
         g_CurrentTurn = 0;
+        g_StepCount = 0;
         g_Status = "Idle";
     }
 

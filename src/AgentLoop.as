@@ -65,12 +65,14 @@ void AgentLoopCoroutine(const string &in userContent) {
     if (toolCalls !is null && toolCalls.Length > 0) {
         LlmHistory::AddAssistantMessage(text);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
+        AgentUI::IncrementStep();
         g_PendingToolCalls = ToolAssembler::ParseToolCalls(resp);
         g_State = STATE_TOOL_CALLS_PENDING;
         ProcessToolCalls();
     } else {
         LlmHistory::AddAssistantMessage(text);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
+        AgentUI::IncrementStep();
         g_State = STATE_IDLE;
         AgentUI::SetStatus("Idle");
     }
@@ -136,6 +138,7 @@ void ProcessToolCalls() {
 
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
     g_State = STATE_AWAITING_LLM;
+    AgentUI::IncrementStep();
     startnew(AgentLoopCoroutine, "");
 }
 
