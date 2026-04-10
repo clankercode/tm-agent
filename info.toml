@@ -1,0 +1,12 @@
+[meta]
+name     = "TM Agent"
+author   = "XertroV"
+category = "Agent"
+version  = "0.1.0"
+
+[script]
+dependencies = ["McpTM", "AiApi", "MLHook"]
+export_dependencies = ["MLHook"]
+
+module = "Agent"
+timeout = 60000
