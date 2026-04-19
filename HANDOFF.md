@@ -81,4 +81,4 @@ Future MCP surfaces doc-reviewed but not yet wired:
 3. If extending MCP coverage, start in `../tm-mcptm/src/McpTM_Tools.as` and mirror the tool wiring in `src/ToolAssembler.as`.
 4. Re-run `openplanet-lsp check .`, `./build.sh unittest`, and `./build.sh dev`.
 
-Generation date: Mon 20 Apr 2026 02:44:00 AEST
+Generation date: Thu 07 Aug 2025 10:30:00 AEST
