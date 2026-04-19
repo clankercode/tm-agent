@@ -59,6 +59,14 @@ void AgentLoopCoroutine(const string &in userContent) {
         return;
     }
 
+    if (resp.HasKey("usage") && resp["usage"].GetType() == Json::Type::Object) {
+        Json::Value@ usage = resp["usage"];
+        int inToks = usage.HasKey("input_tokens") ? int(usage["input_tokens"]) : 0;
+        int outToks = usage.HasKey("output_tokens") ? int(usage["output_tokens"]) : 0;
+        int totToks = usage.HasKey("total_tokens") ? int(usage["total_tokens"]) : 0;
+        AgentUI::UpdateTokenStats(inToks, outToks, totToks);
+    }
+
     string text = "";
     if (resp.HasKey("text") && resp["text"].GetType() != Json::Type::Null) {
         text = string(resp["text"]);

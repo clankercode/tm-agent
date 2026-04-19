@@ -9,6 +9,11 @@ namespace AgentUI {
     int g_StepCount = 0;
     string g_Status = "Idle";
 
+    int g_LastInputTokens = 0;
+    int g_LastOutputTokens = 0;
+    int g_LastTotalTokens = 0;
+    int g_RunningOutputTokens = 0;
+
     enum MsgType { User, Assistant, ToolCall, ToolResult, System }
 
     class Message {
@@ -52,35 +57,89 @@ namespace AgentUI {
         Json::Value@ tools = ToolAssembler::GetToolList();
         Json::Value@ stats = LlmHistory::BuildContextStats(tools, AgentSettings::S_MaxHistoryTokens);
 
-        string provider = AgentSettings::S_Provider == Provider::MiniMax ? "minimax" : "openai";
-        string compaction = bool(stats["hasCompactedHistory"]) ? "yes" : "no";
-        string lastCompaction = "never";
-        if (stats["lastCompactionAt"].GetType() != Json::Type::Null) {
-            uint lastAt = uint(stats["lastCompactionAt"]);
-            if (lastAt > 0) {
-                uint ago = Time::Now > lastAt ? Time::Now - lastAt : 0;
-                lastCompaction = FormatAge(ago) + " ago";
-            }
-        }
+        int maxTokens = AgentSettings::S_MaxHistoryTokens;
+        int usedTokens = int(stats["estimatedTotalTokens"]);
+        int remaining = int(stats["remainingBudgetTokens"]);
+        float fillRatio = maxTokens > 0 ? Math::Clamp(float(usedTokens) / float(maxTokens), 0.0, 1.0) : 0.0;
 
         UI::Separator();
+
+        UI::PushStyleVar(UI::StyleVar::FramePadding, vec2(4, 4));
+        UI::PushStyleVar(UI::StyleVar::ItemSpacing, vec2(8, 2));
+
+        UI::Text("  Context Budget");
+        UI::SameLine();
+
+        float barWidth = UI::GetWindowContentRegionWidth() - 120;
+        float barHeight = 14;
+        float cursorX = UI::GetCursorPos().x;
+
+        vec4 bgColor = vec4(0.15, 0.15, 0.18, 0.9);
+        vec4 fillColor = fillRatio > 0.85 ? vec4(0.9, 0.2, 0.1, 0.9) : fillRatio > 0.7 ? vec4(0.9, 0.7, 0.0, 0.9) : vec4(0.1, 0.85, 0.4, 0.9);
+
+        auto dl = UI::GetWindowDrawList();
+        vec2 windowPos = UI::GetWindowPos();
+        vec2 absBarPos = windowPos + vec2(cursorX, UI::GetCursorPos().y);
+        dl.AddRectFilled(vec4(absBarPos.x, absBarPos.y, absBarPos.x + barWidth, absBarPos.y + barHeight), bgColor, 3);
+        dl.AddRectFilled(vec4(absBarPos.x, absBarPos.y, absBarPos.x + barWidth * fillRatio, absBarPos.y + barHeight), fillColor, 3);
+
+        UI::Dummy(vec2(barWidth, barHeight));
+
+        string provider = AgentSettings::S_Provider == Provider::MiniMax ? "minimax" : "openai";
         string model = provider == "minimax" ? AgentSettings::S_MiniMaxModel : AgentSettings::S_OpenAIModel;
         string effort = provider == "openai" ? AgentSettings::S_OpenAIReasoningEffort : "n/a";
-        UI::Text("Provider: " + provider + " | Model: " + model + " | Effort: " + effort);
-        UI::Text(
-            "Ctx " + FormatTokenCount(int(stats["estimatedTotalTokens"])) + "/" + FormatTokenCount(AgentSettings::S_MaxHistoryTokens)
-            + "  Rem " + FormatTokenCount(int(stats["remainingBudgetTokens"]))
-            + "  Prompt " + FormatTokenCount(int(stats["systemPromptTokens"]))
-            + "  Tools " + FormatTokenCount(int(stats["toolSchemaTokens"]))
-            + "  Hist " + FormatTokenCount(int(stats["historyTokens"]))
-            + "  Sum " + FormatTokenCount(int(stats["summaryTokens"]))
-        );
-        UI::Text(
-            "Msgs " + int(stats["messageCount"])
-            + "  Compactions " + int(stats["compactionCount"])
-            + "  Compacted " + compaction
-            + "  Last " + lastCompaction
-        );
+        UI::TextDisabled("  " + provider + " | " + model + " | " + effort);
+
+        if (UI::BeginTable("stats", 2, UI::TableFlags::SizingFixedSame)) {
+            UI::TableNextRow();
+
+            UI::TableNextColumn();
+            DrawStatRow("Ctx", FormatTokenCount(usedTokens) + "/" + FormatTokenCount(maxTokens), vec4(0.3, 0.75, 1.0, 1.0));
+
+            UI::TableNextColumn();
+            DrawStatRow("Rem", FormatTokenCount(remaining), remaining < 20000 ? vec4(1.0, 0.4, 0.2, 1.0) : vec4(0.4, 0.9, 0.5, 1.0));
+
+            UI::TableNextRow();
+            UI::TableNextColumn();
+            DrawStatRow("In", FormatTokenCount(g_LastInputTokens), vec4(0.5, 0.6, 1.0, 1.0));
+
+            UI::TableNextColumn();
+            DrawStatRow("Out", FormatTokenCount(g_LastOutputTokens), vec4(1.0, 0.6, 0.2, 1.0));
+
+            UI::TableNextRow();
+            UI::TableNextColumn();
+            DrawStatRow("Total Out", FormatTokenCount(g_RunningOutputTokens), vec4(1.0, 0.75, 0.3, 1.0));
+
+            UI::TableNextColumn();
+            DrawStatRow("Sum", FormatTokenCount(int(stats["summaryTokens"])), vec4(0.6, 0.5, 0.8, 1.0));
+
+            UI::TableNextRow();
+            UI::TableNextColumn();
+            DrawStatRow("Hist", FormatTokenCount(int(stats["historyTokens"])), vec4(0.5, 0.8, 0.9, 1.0));
+
+            UI::TableNextColumn();
+            DrawStatRow("Tools", FormatTokenCount(int(stats["toolSchemaTokens"])), vec4(0.7, 0.9, 0.5, 1.0));
+
+            UI::TableNextRow();
+            UI::TableNextColumn();
+            DrawStatRow("Msgs", "" + int(stats["messageCount"]), vec4(0.8, 0.8, 0.8, 1.0));
+
+            UI::TableNextColumn();
+            string compaction = bool(stats["hasCompactedHistory"]) ? "yes" : "no";
+            DrawStatRow("Compact", compaction, compaction == "yes" ? vec4(0.9, 0.5, 0.1, 1.0) : vec4(0.5, 0.5, 0.5, 1.0));
+
+            UI::EndTable();
+        }
+
+        UI::PopStyleVar(2);
+    }
+
+    void DrawStatRow(const string &in label, const string &in value, const vec4 &in color) {
+        UI::PushStyleColor(UI::Col::Text, color);
+        UI::Text(label + ":");
+        UI::PopStyleColor();
+        UI::SameLine();
+        UI::Text(value);
     }
 
     void Render() {
@@ -289,6 +348,17 @@ namespace AgentUI {
         g_CurrentTurn = 0;
         g_StepCount = 0;
         g_Status = "Idle";
+        g_LastInputTokens = 0;
+        g_LastOutputTokens = 0;
+        g_LastTotalTokens = 0;
+        g_RunningOutputTokens = 0;
+    }
+
+    void UpdateTokenStats(int inputTokens, int outputTokens, int totalTokens) {
+        g_LastInputTokens = inputTokens;
+        g_LastOutputTokens = outputTokens;
+        g_LastTotalTokens = totalTokens;
+        g_RunningOutputTokens += outputTokens;
     }
 
     void RenderMenu() {
