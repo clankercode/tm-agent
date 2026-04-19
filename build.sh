@@ -3,9 +3,9 @@ set -euo pipefail
 
 mode="${1:-dev}"
 case "$mode" in
-  dev|release) ;;
+  dev|release|unittest) ;;
   *)
-    echo "usage: ./build.sh [dev|release]" >&2
+    echo "usage: ./build.sh [dev|release|unittest]" >&2
     exit 2
     ;;
 esac
@@ -48,13 +48,28 @@ stage_folder_plugin() {
   local root="$1"
   local slug="$2"
   local dev_suffix="${3:-0}"
+  local build_mode="${4:-dev}"
   local dest="$plugins_dir/$slug"
   mkdir -p "$dest"
   rsync -a --delete "$root/src/" "$dest/"
   cp "$root/info.toml" "$dest/info.toml"
-  sed -i 's/^#__DEFINES__/defines = ["DEV"]/' "$dest/info.toml"
+  case "$build_mode" in
+    dev)
+      sed -i 's/^#__DEFINES__/defines = ["DEV"]/' "$dest/info.toml"
+      ;;
+    unittest)
+      sed -i 's/^#__DEFINES__/defines = ["UNITTEST"]/' "$dest/info.toml"
+      ;;
+  esac
   if [[ "$dev_suffix" == "1" ]]; then
-    sed -i 's/^\(name[ \t="]*\)\(.*\)"/\1\2 (Dev)"/' "$dest/info.toml"
+    case "$build_mode" in
+      dev)
+        sed -i 's/^\(name[ \t="]*\)\(.*\)"/\1\2 (Dev)"/' "$dest/info.toml"
+        ;;
+      unittest)
+        sed -i 's/^\(name[ \t="]*\)\(.*\)"/\1\2 (UnitTest)"/' "$dest/info.toml"
+        ;;
+    esac
   fi
   if [[ "${TM_PLUGIN_SKIP_LSP_CHECK:-0}" != "1" ]]; then
     openplanet-lsp check --plugins-dir "$plugins_dir" --plugin-files-search-path . "$dest"
@@ -86,7 +101,7 @@ stage_local_dependencies() {
   for dep in $(local_dependencies); do
     if root="$(local_dependency_root "$dep")" && [[ -d "$root" ]]; then
       dep_slug="$(plugin_slug "$root")"
-      stage_folder_plugin "$root" "$dep_slug" 0
+      stage_folder_plugin "$root" "$dep_slug" 0 "$mode"
       remote_load_folder "$dep_slug"
     fi
   done
@@ -94,11 +109,11 @@ stage_local_dependencies() {
 
 plugin_name="$(plugin_slug ".")"
 
-if [[ "$mode" == "dev" ]]; then
+if [[ "$mode" == "dev" || "$mode" == "unittest" ]]; then
   if [[ "${TM_PLUGIN_STAGE_LOCAL_DEPS:-1}" != "0" ]]; then
     stage_local_dependencies
   fi
-  stage_folder_plugin . "$plugin_name" 1
+  stage_folder_plugin . "$plugin_name" 1 "$mode"
   remote_load_folder "$plugin_name"
 else
   version="$(awk -F= '/^version/ { gsub(/[ "]/, "", $2); print $2; exit }' info.toml)"

@@ -17,17 +17,18 @@ void SendMessage(const string &in content) {
 }
 
 void AgentLoopCoroutine(const string &in userContent) {
-    LlmHistory::TruncateHistory(AgentSettings::S_MaxHistoryTokens);
-    Json::Value@ messages = LlmHistory::GetMessagesForLlm(ToolAssembler::GetToolList());
+    Json::Value@ tools = ToolAssembler::GetToolList();
+    LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens);
+    Json::Value@ messages = LlmHistory::GetMessagesForLlm(tools);
 
-    string provider = AgentSettings::S_Provider;
+    Provider provider = AgentSettings::S_Provider;
     string apiKey;
     string model;
 
-    if (provider == "minimax" && AgentSettings::S_MiniMaxApiKey.Length > 0) {
+    if (provider == Provider::MiniMax && AgentSettings::S_MiniMaxApiKey.Length > 0) {
         apiKey = AgentSettings::S_MiniMaxApiKey;
         model = AgentSettings::S_MiniMaxModel;
-    } else if (provider == "openai" && AgentSettings::S_OpenAIApiKey.Length > 0) {
+    } else if (provider == Provider::OpenAI && AgentSettings::S_OpenAIApiKey.Length > 0) {
         apiKey = AgentSettings::S_OpenAIApiKey;
         model = AgentSettings::S_OpenAIModel;
     } else {
@@ -38,10 +39,16 @@ void AgentLoopCoroutine(const string &in userContent) {
     }
 
     Json::Value@ resp;
-    if (provider == "minimax") {
+    if (provider == Provider::MiniMax) {
         resp = AiApi::Anthropic_Complete(apiKey, model, messages, ToolAssembler::GetToolList());
     } else {
-        resp = AiApi::OpenAI_Complete(apiKey, model, messages, ToolAssembler::GetToolList());
+        resp = AiApi::OpenAI_Complete(
+            apiKey,
+            model,
+            AgentSettings::S_OpenAIReasoningEffort,
+            messages,
+            ToolAssembler::GetToolList()
+        );
     }
 
     if (resp.HasKey("error") && resp["error"].GetType() != Json::Type::Null) {
@@ -59,7 +66,7 @@ void AgentLoopCoroutine(const string &in userContent) {
 
     auto parsedToolCalls = ToolAssembler::ParseToolCalls(resp);
     if (parsedToolCalls.Length > 0) {
-        LlmHistory::AddAssistantMessage(text);
+        LlmHistory::AddAssistantToolCalls(text, parsedToolCalls);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
         g_PendingToolCalls = parsedToolCalls;
@@ -129,7 +136,7 @@ void ProcessToolCalls() {
         }
 
         AgentUI::AddToolResult(name, Json::Write(actualResult));
-        // LlmHistory::AddToolResult(toolCallId, name, Json::Write(actualResult));
+        LlmHistory::AddToolResult(toolCallId, name, Json::Write(actualResult));
     }
 
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);

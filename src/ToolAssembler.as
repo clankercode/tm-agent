@@ -4,6 +4,8 @@ import Json::Value@ GetCursor(Json::Value &in input) from "McpTM";
 import Json::Value@ GetMapInfo(Json::Value &in input) from "McpTM";
 import Json::Value@ GetBlocks(Json::Value &in input) from "McpTM";
 import Json::Value@ GetItems(Json::Value &in input) from "McpTM";
+import Json::Value@ GetInventorySummary(Json::Value &in input) from "McpTM";
+import Json::Value@ FindInventory(Json::Value &in input) from "McpTM";
 import Json::Value@ GetBlockAt(Json::Value &in input) from "McpTM";
 import Json::Value@ GetPickedBlock(Json::Value &in input) from "McpTM";
 import Json::Value@ GetPlacementMode(Json::Value &in input) from "McpTM";
@@ -22,7 +24,7 @@ import Json::Value@ GetServerInfo(Json::Value &in input) from "McpTM";
 
 namespace ToolAssembler {
     Json::Value@ GetToolList() {
-        Json::Value tools = Json::Array();
+        Json::Value@ tools = Json::Array();
         
         AddTool(tools, "PlaceBlock",
             "Place a block in the editor. Inputs: blockName (string), x, y, z (int coords), dir (North/East/South/West)",
@@ -52,6 +54,16 @@ namespace ToolAssembler {
         AddTool(tools, "GetItems",
             "Get items near a point. Inputs: x, y, z (float coords), radius (float)",
             '{"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}, "radius": {"type": "number"}}, "required": ["x", "y", "z", "radius"]}'
+        );
+
+        AddTool(tools, "GetInventorySummary",
+            "Summarize the current inventory tree, current directory, and selected node.",
+            '{"type": "object", "properties": {}}'
+        );
+
+        AddTool(tools, "FindInventory",
+            "Search the inventory tree by query. Inputs: query (optional), type (all/directory/article), scope (all/currentDirectory), limit (optional).",
+            '{"type": "object", "properties": {"query": {"type": "string"}, "type": {"type": "string", "enum": ["all", "directory", "article"]}, "scope": {"type": "string", "enum": ["all", "currentDirectory", "current"]}, "limit": {"type": "integer"}}, "required": []}'
         );
         
         AddTool(tools, "GetBlockAt",
@@ -132,7 +144,7 @@ namespace ToolAssembler {
         return tools;
     }
 
-    void AddTool(Json::Value &in tools, const string &in name, const string &in desc, const string &in inputSchemaJson) {
+    void AddTool(Json::Value@ tools, const string &in name, const string &in desc, const string &in inputSchemaJson) {
         Json::Value tool = Json::Object();
         tool["name"] = name;
         tool["description"] = desc;
@@ -190,6 +202,8 @@ namespace ToolAssembler {
         else if (name == "GetMapInfo") return GetMapInfo(input);
         else if (name == "GetBlocks") return GetBlocks(input);
         else if (name == "GetItems") return GetItems(input);
+        else if (name == "GetInventorySummary") return GetInventorySummary(input);
+        else if (name == "FindInventory") return FindInventory(input);
         else if (name == "GetBlockAt") return GetBlockAt(input);
         else if (name == "GetPickedBlock") return GetPickedBlock(input);
         else if (name == "GetPlacementMode") return GetPlacementMode(input);
