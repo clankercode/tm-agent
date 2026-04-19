@@ -21,5 +21,5 @@ Describe in detail:
 4. What looks good and what could be improved?
 5. Create an ASCII art mockup of the TM Agent window showing its structure"
 
-echo "Analyzing screenshot with claude :sonnet..."
-ccc cc +0 :sonnet "$PROMPT" 2>&1
+echo "Analyzing screenshot with claude :opus..."
+ccc cc +0 :opus ..text "$PROMPT" 2>&1

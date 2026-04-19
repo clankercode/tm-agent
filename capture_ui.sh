@@ -1,25 +1,34 @@
 #!/bin/bash
-# Capture TM Agent UI screenshot using tm-control-mcp TakeScreenshot tool
+# Capture TM Agent UI screenshot using xdotool + ImageMagick
 # Usage: ./capture_ui.sh
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MCP_DIR="$(dirname "$SCRIPT_DIR")/tm-control-mcp"
+OUTPUT="/tmp/tm_agent_ui.png"
 
-echo "Taking screenshot..."
-RESULT="$("$MCP_DIR/tools/call.py" TakeScreenshot '{"format":"png"}' 2>&1)"
+# Find window with exact name "Trackmania" (not CodeBrowser/Ghidra)
+WID=$(xdotool search --name "Trackmania" 2>&1 | while read wid; do
+  name=$(xdotool getwindowname "$wid" 2>/dev/null)
+  if [ "$name" = "Trackmania" ]; then
+    echo "$wid"
+    break
+  fi
+done)
 
-if echo "$RESULT" | grep -q '"ok"'; then
-    LINUX_PATH=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('result',{}).get('output',{}).get('detectedScreenshot',{}).get('linuxPath',''))" 2>/dev/null)
-    if [ -n "$LINUX_PATH" ] && [ -f "$LINUX_PATH" ]; then
-        echo "Screenshot found at: $LINUX_PATH"
-        cp "$LINUX_PATH" /tmp/tm_agent_ui.png
-        echo "Copied to /tmp/tm_agent_ui.png"
-        echo "PATH=/tmp/tm_agent_ui.png"
-    else
-        echo "Could not find screenshot file"
-        echo "$RESULT"
-    fi
-else
-    echo "Screenshot failed"
-    echo "$RESULT"
+if [ -z "$WID" ]; then
+    echo "Error: Trackmania window not found"
+    exit 1
 fi
+
+import -window "$WID" "$OUTPUT" 2>&1
+if [ ! -f "$OUTPUT" ]; then
+    echo "Screenshot failed"
+    exit 1
+fi
+
+# Crop to the pinned window region (set by ChatUI::Render)
+# g_WindowPos = (120, 120), g_WindowSize = (440, 620), plus titlebar padding.
+CROPPED="/tmp/tm_agent_ui_crop.png"
+mogrify -crop 460x640+110+110 -path /tmp -format png -write "$CROPPED" "$OUTPUT" 2>/dev/null || \
+  convert "$OUTPUT" -crop 460x640+110+110 +repage "$CROPPED"
+
+echo "PATH=$OUTPUT"
+echo "CROP=$CROPPED"
