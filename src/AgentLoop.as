@@ -44,8 +44,8 @@ void AgentLoopCoroutine(const string &in userContent) {
         resp = AiApi::OpenAI_Complete(apiKey, model, messages, ToolAssembler::GetToolList());
     }
 
-    if (resp.HasKey("error") && !resp["error"].IsNull()) {
-        string errorMsg = resp["error"].IsString() ? string(resp["error"]) : Json::Stringify(resp["error"]);
+    if (resp.HasKey("error") && resp["error"].GetType() != Json::Type::Null) {
+        string errorMsg = string(resp["error"]);
         AgentUI::SetStatus("Error: " + errorMsg);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: " + errorMsg);
         g_State = STATE_IDLE;
@@ -53,20 +53,16 @@ void AgentLoopCoroutine(const string &in userContent) {
     }
 
     string text = "";
-    if (resp.HasKey("text") && !resp["text"].IsNull()) {
+    if (resp.HasKey("text") && resp["text"].GetType() != Json::Type::Null) {
         text = string(resp["text"]);
     }
 
-    Json::Value@ toolCalls = null;
-    if (resp.HasKey("tool_calls") && !resp["tool_calls"].IsNull()) {
-        toolCalls = resp["tool_calls"];
-    }
-
-    if (toolCalls !is null && toolCalls.Length > 0) {
+    auto parsedToolCalls = ToolAssembler::ParseToolCalls(resp);
+    if (parsedToolCalls.Length > 0) {
         LlmHistory::AddAssistantMessage(text);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
-        g_PendingToolCalls = ToolAssembler::ParseToolCalls(resp);
+        g_PendingToolCalls = parsedToolCalls;
         g_State = STATE_TOOL_CALLS_PENDING;
         ProcessToolCalls();
     } else {
@@ -90,7 +86,7 @@ void ProcessToolCalls() {
         Json::Value@ input = toolCall["input"];
         string toolCallId = toolCall["id"];
 
-        AgentUI::AddToolCall(name, Json::Stringify(input));
+        AgentUI::AddToolCall(name, Json::Write(input));
         Json::Value@ result = ToolAssembler::ExecuteToolCall(toolCall);
 
         Json::Value@ actualResult;
@@ -132,8 +128,8 @@ void ProcessToolCalls() {
             actualResult = result;
         }
 
-        AgentUI::AddToolResult(name, Json::Stringify(actualResult));
-        // LlmHistory::AddToolResult(toolCallId, name, Json::Stringify(actualResult));
+        AgentUI::AddToolResult(name, Json::Write(actualResult));
+        // LlmHistory::AddToolResult(toolCallId, name, Json::Write(actualResult));
     }
 
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);

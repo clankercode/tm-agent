@@ -140,20 +140,20 @@ namespace ToolAssembler {
         tools.Add(tool);
     }
 
-    Json::Value@ ParseToolCalls(const Json::Value &in response) {
-        Json::Value toolCalls = Json::Array();
+    array<Json::Value@> ParseToolCalls(const Json::Value &in response) {
+        array<Json::Value@> toolCalls;
         
         if (response.HasKey("content")) {
             auto content = response["content"];
             if (content.GetType() == Json::Type::Array) {
-                for (uint i = 0; i < content.Size(); i++) {
-                    auto &block = content[i];
-                    if (block.HasKey("type") && string(block["type"]) == "tool_use") {
+                for (uint i = 0; i < content.Length; i++) {
+                    const Json::Value@ block = content[i];
+                    if (block !is null && block.HasKey("type") && string(block["type"]) == "tool_use") {
                         Json::Value tc = Json::Object();
                         tc["name"] = string(block["name"]);
                         tc["input"] = Json::Parse(string(block["input"]));
                         tc["id"] = block.HasKey("id") ? string(block["id"]) : "call_" + i;
-                        toolCalls.Add(tc);
+                        toolCalls.InsertLast(tc);
                     }
                 }
             }
@@ -161,17 +161,17 @@ namespace ToolAssembler {
         
         else if (response.HasKey("choices")) {
             auto choices = response["choices"];
-            if (choices.Size() > 0) {
-                auto &msg = choices[0]["message"];
+            if (choices.GetType() == Json::Type::Array && choices.Length > 0) {
+                const Json::Value@ msg = choices[0]["message"];
                 if (msg.HasKey("tool_calls")) {
-                    auto &tcs = msg["tool_calls"];
-                    for (uint i = 0; i < tcs.Size(); i++) {
-                        auto &tc = tcs[i];
+                    const Json::Value@ tcs = msg["tool_calls"];
+                    for (uint i = 0; i < tcs.Length; i++) {
+                        const Json::Value@ tc = tcs[i];
                         Json::Value item = Json::Object();
                         item["name"] = string(tc["function"]["name"]);
                         item["input"] = Json::Parse(string(tc["function"]["arguments"]));
                         item["id"] = string(tc["id"]);
-                        toolCalls.Add(item);
+                        toolCalls.InsertLast(item);
                     }
                 }
             }
@@ -182,7 +182,7 @@ namespace ToolAssembler {
 
     Json::Value@ ExecuteToolCall(const Json::Value &in toolCall) {
         string name = string(toolCall["name"]);
-        auto &input = toolCall["input"];
+        const Json::Value@ input = toolCall["input"];
         
         if (name == "PlaceBlock") return PlaceBlock(input);
         else if (name == "RemoveBlock") return RemoveBlock(input);
@@ -213,6 +213,6 @@ namespace ToolAssembler {
     }
 
     string GetToolResultJson(const Json::Value &in result) {
-        return Json::Stringify(result);
+        return Json::Write(result);
     }
 }

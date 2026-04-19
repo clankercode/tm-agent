@@ -27,6 +27,16 @@ namespace AgentUI {
 
     array<Message@> g_Messages;
 
+    void DrawColoredText(const vec4 &in color, const string &in text) {
+        UI::PushStyleColor(UI::Col::Text, color);
+        UI::Text(text);
+        UI::PopStyleColor();
+    }
+
+    void DrawSpacing() {
+        UI::Dummy(vec2(0, 4));
+    }
+
     void Render() {
         if (!g_WindowVisible) return;
 
@@ -39,8 +49,9 @@ namespace AgentUI {
             DrawInput();
             DrawSettings();
 
-            g_WindowWidth = UI::GetWindowWidth();
-            g_WindowHeight = UI::GetWindowHeight();
+            auto winSize = UI::GetWindowSize();
+            g_WindowWidth = winSize.x;
+            g_WindowHeight = winSize.y;
             g_WindowPos = UI::GetWindowPos();
         }
         UI::End();
@@ -48,17 +59,17 @@ namespace AgentUI {
 
     void DrawHeader() {
         if (g_Status.StartsWith("Error:")) {
-            UI::TextColored(vec4(1, 0, 0, 1), "Turn " + g_CurrentTurn + "." + g_StepCount);
+            DrawColoredText(vec4(1, 0, 0, 1), "Turn " + g_CurrentTurn + "." + g_StepCount);
             UI::SameLine();
-            UI::TextColored(vec4(1, 0, 0, 1), g_Status);
+            DrawColoredText(vec4(1, 0, 0, 1), g_Status);
         } else {
             UI::Text("Turn " + g_CurrentTurn + "." + g_StepCount);
             UI::SameLine();
 
             if (g_Status == "Idle") {
-                UI::TextColored(vec4(0, 1, 0, 1), "[Idle]");
+                DrawColoredText(vec4(0, 1, 0, 1), "[Idle]");
             } else if (g_Status == "Running" || g_Status == "Calling LLM...") {
-                UI::TextColored(vec4(1, 1, 0, 1), "[" + g_Status + "]");
+                DrawColoredText(vec4(1, 1, 0, 1), "[" + g_Status + "]");
                 UI::SameLine();
                 int dotCount = (Time::Now / 300) % 4;
                 string dots = "";
@@ -66,12 +77,12 @@ namespace AgentUI {
                 for (int i = dotCount; i < 3; i++) dots += " ";
                 UI::TextDisabled(dots);
             } else {
-                UI::TextColored(vec4(1, 0, 0, 1), "[" + g_Status + "]");
+                DrawColoredText(vec4(1, 0, 0, 1), "[" + g_Status + "]");
             }
         }
 
         UI::SameLine();
-        UI::SetCursorPosX(UI::GetWindowWidth() - 60);
+        UI::SetCursorPosX(UI::GetWindowSize().x - 60);
         if (UI::Button("Clear")) {
             ClearMessages();
         }
@@ -93,13 +104,13 @@ namespace AgentUI {
 
     void DrawMessage(Message@ msg) {
         if (msg.type == MsgType::User) {
-            UI::TextColored(vec4(0.5, 0.5, 1, 1), "You:");
+            DrawColoredText(vec4(0.5, 0.5, 1, 1), "You:");
             UI::Text(msg.content);
-            UI::Spacing();
+            DrawSpacing();
         } else if (msg.type == MsgType::Assistant) {
-            UI::TextColored(vec4(1, 0.8, 0, 1), "Agent:");
+            DrawColoredText(vec4(1, 0.8, 0, 1), "Agent:");
             UI::Text(msg.content);
-            UI::Spacing();
+            DrawSpacing();
         } else if (msg.type == MsgType::ToolCall) {
             UI::Indent();
             if (UI::TreeNode(msg.toolName + "()")) {
@@ -109,13 +120,13 @@ namespace AgentUI {
             UI::Unindent();
         } else if (msg.type == MsgType::ToolResult) {
             UI::Indent();
-            UI::TextColored(vec4(0, 0.8, 0, 1), msg.toolName + " result:");
+            DrawColoredText(vec4(0, 0.8, 0, 1), msg.toolName + " result:");
             UI::Text(msg.toolResult);
             UI::Unindent();
-            UI::Spacing();
+            DrawSpacing();
         } else if (msg.type == MsgType::System) {
-            UI::TextColored(vec4(0.6, 0.6, 0.6, 1), msg.content);
-            UI::Spacing();
+            DrawColoredText(vec4(0.6, 0.6, 0.6, 1), msg.content);
+            DrawSpacing();
         }
     }
 
@@ -125,12 +136,7 @@ namespace AgentUI {
         float inputHeight = 60;
         float inputWidth = UI::GetWindowContentRegionWidth() - 80;
 
-        if (UI::InputTextMultiline("##input", g_InputText, vec2(inputWidth, inputHeight), UI::InputTextFlags::EnterReturnsTrue)) {
-            if (g_InputText.Length > 0) {
-                SendMessage(g_InputText);
-                g_InputText = "";
-            }
-        }
+        g_InputText = UI::InputTextMultiline("##input", g_InputText, vec2(inputWidth, inputHeight));
 
         UI::SameLine();
         if (UI::Button("Send")) {
@@ -185,7 +191,7 @@ namespace AgentUI {
     }
 
     void SendMessageCoro(const string &in text) {
-        AgentLoop::SendMessage(text);
+        ::SendMessage(text);
     }
 
     void AddMessage(MsgType t, const string &in content) {

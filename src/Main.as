@@ -1,13 +1,13 @@
 void Main() {
-    startnew(OnLoop, 0);
+    // No-op; render callbacks are hooked directly below.
 }
 
-void OnLoop() {
-    while (true) {
-        AgentUI::RenderMenu();
-        AgentUI::Render();
-        yield();
-    }
+void RenderMenu() {
+    AgentUI::RenderMenu();
+}
+
+void Render() {
+    AgentUI::Render();
 }
 
 void OnDestroyed() {

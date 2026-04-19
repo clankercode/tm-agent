@@ -5,7 +5,7 @@ category = "Agent"
 version  = "0.1.0"
 
 [script]
-dependencies = ["McpTM", "AiApi", "MLHook"]
+dependencies = ["mcp-tm", "ai-api", "MLHook"]
 export_dependencies = ["MLHook"]
 
 module = "Agent"
