@@ -24,4 +24,7 @@ namespace AgentSettings {
 
     [Setting category="General" name="Max History Tokens"]
     int S_MaxHistoryTokens = 120000;
+
+    [Setting category="UI" name="Show Window"]
+    bool S_ShowWindow = true;
 }

@@ -1,5 +1,4 @@
 namespace AgentUI {
-    bool g_WindowVisible = false;
     bool g_SettingsExpanded = false;
     float g_WindowWidth = 400;
     float g_WindowHeight = 500;
@@ -143,12 +142,12 @@ namespace AgentUI {
     }
 
     void Render() {
-        if (!g_WindowVisible) return;
+        if (!AgentSettings::S_ShowWindow) return;
 
         UI::SetNextWindowSize(int(g_WindowWidth), int(g_WindowHeight), UI::Cond::FirstUseEver);
         UI::SetNextWindowPos(int(g_WindowPos.x), int(g_WindowPos.y), UI::Cond::FirstUseEver);
 
-        if (UI::Begin("TM Agent", g_WindowVisible, UI::WindowFlags::NoTitleBar)) {
+        if (UI::Begin("TM Agent", AgentSettings::S_ShowWindow, UI::WindowFlags::NoCollapse)) {
             DrawHeader();
             DrawMessages();
             DrawInput();
@@ -362,8 +361,8 @@ namespace AgentUI {
     }
 
     void RenderMenu() {
-        if (UI::MenuItem("TM Agent", "", g_WindowVisible)) {
-            g_WindowVisible = !g_WindowVisible;
+        if (UI::MenuItem("TM Agent", "", AgentSettings::S_ShowWindow)) {
+            AgentSettings::S_ShowWindow = !AgentSettings::S_ShowWindow;
         }
     }
 }
