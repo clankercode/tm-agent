@@ -10,6 +10,12 @@ void Render() {
     AgentUI::Render();
 }
 
+#if DEV
+void Update(float dt) {
+    AgentDriver::Poll();
+}
+#endif
+
 void OnDestroyed() {
     AgentUI::ClearMessages();
 }

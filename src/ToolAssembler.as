@@ -1,26 +1,26 @@
-import Json::Value@ PlaceBlock(Json::Value &in input) from "McpTM";
-import Json::Value@ RemoveBlock(Json::Value &in input) from "McpTM";
-import Json::Value@ GetCursor(Json::Value &in input) from "McpTM";
-import Json::Value@ GetMapInfo(Json::Value &in input) from "McpTM";
-import Json::Value@ GetBlocks(Json::Value &in input) from "McpTM";
-import Json::Value@ GetItems(Json::Value &in input) from "McpTM";
-import Json::Value@ GetInventorySummary(Json::Value &in input) from "McpTM";
-import Json::Value@ FindInventory(Json::Value &in input) from "McpTM";
-import Json::Value@ GetBlockAt(Json::Value &in input) from "McpTM";
-import Json::Value@ GetPickedBlock(Json::Value &in input) from "McpTM";
-import Json::Value@ GetPlacementMode(Json::Value &in input) from "McpTM";
-import Json::Value@ GetEditMode(Json::Value &in input) from "McpTM";
-import Json::Value@ Undo(Json::Value &in input) from "McpTM";
-import Json::Value@ Redo(Json::Value &in input) from "McpTM";
-import Json::Value@ TestMap(Json::Value &in input) from "McpTM";
-import Json::Value@ SaveMap(Json::Value &in input) from "McpTM";
-import Json::Value@ GetResult(Json::Value &in input) from "McpTM";
-import Json::Value@ SetCursorBlock(Json::Value &in input) from "McpTM";
-import Json::Value@ SetCursorItem(Json::Value &in input) from "McpTM";
-import Json::Value@ GetRaceData(Json::Value &in input) from "McpTM";
-import Json::Value@ GetPlayers(Json::Value &in input) from "McpTM";
-import Json::Value@ GetMode(Json::Value &in input) from "McpTM";
-import Json::Value@ GetServerInfo(Json::Value &in input) from "McpTM";
+import Json::Value@ PlaceBlock(Json::Value@ input) from "McpTM";
+import Json::Value@ RemoveBlock(Json::Value@ input) from "McpTM";
+import Json::Value@ GetCursor(Json::Value@ input) from "McpTM";
+import Json::Value@ GetMapInfo(Json::Value@ input) from "McpTM";
+import Json::Value@ GetBlocks(Json::Value@ input) from "McpTM";
+import Json::Value@ GetItems(Json::Value@ input) from "McpTM";
+import Json::Value@ GetInventorySummary(Json::Value@ input) from "McpTM";
+import Json::Value@ FindInventory(Json::Value@ input) from "McpTM";
+import Json::Value@ GetBlockAt(Json::Value@ input) from "McpTM";
+import Json::Value@ GetPickedBlock(Json::Value@ input) from "McpTM";
+import Json::Value@ GetPlacementMode(Json::Value@ input) from "McpTM";
+import Json::Value@ GetEditMode(Json::Value@ input) from "McpTM";
+import Json::Value@ Undo(Json::Value@ input) from "McpTM";
+import Json::Value@ Redo(Json::Value@ input) from "McpTM";
+import Json::Value@ TestMap(Json::Value@ input) from "McpTM";
+import Json::Value@ SaveMap(Json::Value@ input) from "McpTM";
+import Json::Value@ GetResult(Json::Value@ input) from "McpTM";
+import Json::Value@ SetCursorBlock(Json::Value@ input) from "McpTM";
+import Json::Value@ SetCursorItem(Json::Value@ input) from "McpTM";
+import Json::Value@ GetRaceData(Json::Value@ input) from "McpTM";
+import Json::Value@ GetPlayers(Json::Value@ input) from "McpTM";
+import Json::Value@ GetMode(Json::Value@ input) from "McpTM";
+import Json::Value@ GetServerInfo(Json::Value@ input) from "McpTM";
 
 namespace ToolAssembler {
     Json::Value@ GetToolList() {
@@ -192,38 +192,51 @@ namespace ToolAssembler {
         return toolCalls;
     }
 
-    Json::Value@ ExecuteToolCall(const Json::Value &in toolCall) {
+    bool IsFocusableTool(const string &in name) {
+        return name == "PlaceBlock"
+            || name == "RemoveBlock"
+            || name == "GetBlockAt";
+    }
+
+    Json::Value@ ExecuteToolCall(Json::Value@ toolCall) {
         string name = string(toolCall["name"]);
-        const Json::Value@ input = toolCall["input"];
-        
-        if (name == "PlaceBlock") return PlaceBlock(input);
-        else if (name == "RemoveBlock") return RemoveBlock(input);
-        else if (name == "GetCursor") return GetCursor(input);
-        else if (name == "GetMapInfo") return GetMapInfo(input);
-        else if (name == "GetBlocks") return GetBlocks(input);
-        else if (name == "GetItems") return GetItems(input);
-        else if (name == "GetInventorySummary") return GetInventorySummary(input);
-        else if (name == "FindInventory") return FindInventory(input);
-        else if (name == "GetBlockAt") return GetBlockAt(input);
-        else if (name == "GetPickedBlock") return GetPickedBlock(input);
-        else if (name == "GetPlacementMode") return GetPlacementMode(input);
-        else if (name == "GetEditMode") return GetEditMode(input);
-        else if (name == "Undo") return Undo(input);
-        else if (name == "Redo") return Redo(input);
-        else if (name == "TestMap") return TestMap(input);
-        else if (name == "SaveMap") return SaveMap(input);
-        else if (name == "GetResult") return GetResult(input);
-        else if (name == "SetCursorBlock") return SetCursorBlock(input);
-        else if (name == "SetCursorItem") return SetCursorItem(input);
-        else if (name == "GetRaceData") return GetRaceData(input);
-        else if (name == "GetPlayers") return GetPlayers(input);
-        else if (name == "GetMode") return GetMode(input);
-        else if (name == "GetServerInfo") return GetServerInfo(input);
-        
-        Json::Value err = Json::Object();
-        err["success"] = false;
-        err["error"] = "unknown tool: " + name;
-        return err;
+        Json::Value@ input = toolCall["input"];
+        Json::Value@ result;
+
+        if (name == "PlaceBlock") @result = PlaceBlock(input);
+        else if (name == "RemoveBlock") @result = RemoveBlock(input);
+        else if (name == "GetCursor") @result = GetCursor(input);
+        else if (name == "GetMapInfo") @result = GetMapInfo(input);
+        else if (name == "GetBlocks") @result = GetBlocks(input);
+        else if (name == "GetItems") @result = GetItems(input);
+        else if (name == "GetInventorySummary") @result = GetInventorySummary(input);
+        else if (name == "FindInventory") @result = FindInventory(input);
+        else if (name == "GetBlockAt") @result = GetBlockAt(input);
+        else if (name == "GetPickedBlock") @result = GetPickedBlock(input);
+        else if (name == "GetPlacementMode") @result = GetPlacementMode(input);
+        else if (name == "GetEditMode") @result = GetEditMode(input);
+        else if (name == "Undo") @result = Undo(input);
+        else if (name == "Redo") @result = Redo(input);
+        else if (name == "TestMap") @result = TestMap(input);
+        else if (name == "SaveMap") @result = SaveMap(input);
+        else if (name == "GetResult") @result = GetResult(input);
+        else if (name == "SetCursorBlock") @result = SetCursorBlock(input);
+        else if (name == "SetCursorItem") @result = SetCursorItem(input);
+        else if (name == "GetRaceData") @result = GetRaceData(input);
+        else if (name == "GetPlayers") @result = GetPlayers(input);
+        else if (name == "GetMode") @result = GetMode(input);
+        else if (name == "GetServerInfo") @result = GetServerInfo(input);
+        else {
+            Json::Value err = Json::Object();
+            err["success"] = false;
+            err["error"] = "unknown tool: " + name;
+            return err;
+        }
+
+        if (IsFocusableTool(name) && result !is null) {
+            CameraFocus::TryFocusFromResult(result, input);
+        }
+        return result;
     }
 
     string GetToolResultJson(const Json::Value &in result) {

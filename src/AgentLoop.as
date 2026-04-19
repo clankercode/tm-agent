@@ -16,6 +16,72 @@ void SendMessage(const string &in content) {
     startnew(AgentLoopCoroutine, content);
 }
 
+// Minimal provider ping used by the "Test Provider" button in Settings.
+// Lives next to AgentLoopCoroutine because the AiApi::* cross-plugin
+// imports only bind correctly when invoked from this file.
+void ProviderTestCoro() {
+    uint tStart = Time::Now;
+    Provider provider = AgentSettings::S_Provider;
+    string provLabel = (provider == Provider::MiniMax) ? "minimax" : "openai";
+    string apiKey;
+    string model;
+    if (provider == Provider::MiniMax) {
+        apiKey = AgentSettings::S_MiniMaxApiKey;
+        model = AgentSettings::S_MiniMaxModel;
+    } else {
+        apiKey = AgentSettings::S_OpenAIApiKey;
+        model = AgentSettings::S_OpenAIModel;
+    }
+
+    print("[tm-agent] test: provider=" + provLabel + " model=" + model + " keyLen=" + apiKey.Length);
+
+    if (apiKey.Length == 0) {
+        AgentUI::g_TestResult = "No API key set";
+        AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
+        AgentUI::g_TestRunning = false;
+        return;
+    }
+
+    Json::Value@ msgs = Json::Array();
+    msgs.Add(AiApi::NewMessage("user", "ping"));
+    Json::Value@ tools = Json::Array();
+
+    print("[tm-agent] test: calling " + provLabel + " Complete()...");
+    AgentUI::g_TestResult = "Calling " + provLabel + "…";
+    Json::Value@ resp;
+    if (provider == Provider::MiniMax) {
+        @resp = AiApi::Anthropic_Complete(apiKey, model, msgs, tools);
+    } else {
+        // Use the configured effort so "Test Provider" validates the
+        // actual config you use in real turns, not a hardcoded placeholder.
+        array<string> responsesPrefixes = {"gpt-5"};
+        AiApi::ILlmProvider@ oai = AiApi::NewOpenAIProvider(apiKey, responsesPrefixes);
+        @resp = oai.Complete(model, AgentSettings::S_OpenAIReasoningEffort, msgs, tools);
+    }
+    uint elapsed = Time::Now - tStart;
+    print("[tm-agent] test: returned after " + elapsed + "ms");
+
+    if (resp is null) {
+        print("[tm-agent] test: resp is null");
+        AgentUI::g_TestResult = "No response";
+        AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
+    } else if (resp.HasKey("error") && resp["error"].GetType() != Json::Type::Null) {
+        string err = string(resp["error"]);
+        print("[tm-agent] test: error=" + err);
+        string shown = err;
+        if (shown.Length > 48) shown = shown.SubStr(0, 45) + "…";
+        AgentUI::g_TestResult = shown;
+        AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
+    } else {
+        string respSummary = Json::Write(resp);
+        if (respSummary.Length > 200) respSummary = respSummary.SubStr(0, 200) + "…";
+        print("[tm-agent] test: ok; resp=" + respSummary);
+        AgentUI::g_TestResult = "OK  " + model + "  (" + elapsed + "ms)";
+        AgentUI::g_TestColor = vec4(0.32, 0.86, 0.45, 1.0);
+    }
+    AgentUI::g_TestRunning = false;
+}
+
 void AgentLoopCoroutine(const string &in userContent) {
     Json::Value@ tools = ToolAssembler::GetToolList();
     LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens);
@@ -40,10 +106,11 @@ void AgentLoopCoroutine(const string &in userContent) {
 
     Json::Value@ resp;
     if (provider == Provider::MiniMax) {
-        resp = AiApi::Anthropic_Complete(apiKey, model, messages, ToolAssembler::GetToolList());
+        @resp = AiApi::Anthropic_Complete(apiKey, model, messages, ToolAssembler::GetToolList());
     } else {
-        resp = AiApi::OpenAI_Complete(
-            apiKey,
+        array<string> responsesPrefixes = {"gpt-5"};
+        AiApi::ILlmProvider@ oai = AiApi::NewOpenAIProvider(apiKey, responsesPrefixes);
+        @resp = oai.Complete(
             model,
             AgentSettings::S_OpenAIReasoningEffort,
             messages,

@@ -25,6 +25,9 @@ namespace AgentSettings {
     [Setting category="General" name="Max History Tokens"]
     int S_MaxHistoryTokens = 120000;
 
+    [Setting category="General" name="Compact Button Threshold (tokens)" description="Show the Compact button once used context passes this threshold" min="4000" max="200000"]
+    int S_CompactButtonThreshold = 50000;
+
     [Setting category="UI" name="Show Window"]
     bool S_ShowWindow = true;
 }

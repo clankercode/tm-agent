@@ -1,8 +1,15 @@
 namespace AgentUI {
     bool g_SettingsExpanded = false;
+    bool g_ShowSettings = false;
+    bool g_PendingScrollBottom = false;
     float g_WindowWidth = 440;
     float g_WindowHeight = 620;
     vec2 g_WindowPos = vec2(120, 120);
+
+    // Settings window is managed by ImGui — we record its last-known pos/size
+    // during Render so the driver can report it without asking ImGui directly.
+    vec2 g_SettingsPos = vec2(0, 0);
+    vec2 g_SettingsSize = vec2(0, 0);
     string g_InputText = "";
     int g_CurrentTurn = 0;
     int g_StepCount = 0;
@@ -12,6 +19,11 @@ namespace AgentUI {
     int g_LastOutputTokens = 0;
     int g_LastTotalTokens = 0;
     int g_RunningOutputTokens = 0;
+
+    // Provider-test feedback shown under the Test button in Settings.
+    string g_TestResult = "";
+    vec4 g_TestColor = vec4(0.48, 0.52, 0.58, 1.0);
+    bool g_TestRunning = false;
 
     enum MsgType { User, Assistant, ToolCall, ToolResult, System }
 
@@ -43,7 +55,10 @@ namespace AgentUI {
     }
 
     string FormatTokenCount(int tokens) {
-        return "" + tokens;
+        if (tokens < 1000) return "" + tokens;
+        if (tokens < 10000) return Text::Format("%.1fk", float(tokens) / 1000.0);
+        if (tokens < 1000000) return "" + (tokens / 1000) + "k";
+        return Text::Format("%.1fM", float(tokens) / 1000000.0);
     }
 
     string FormatAge(uint ageMs) {
@@ -66,8 +81,8 @@ namespace AgentUI {
 
         UI::PushStyleColor(UI::Col::PlotHistogram, fillColor);
         UI::PushStyleColor(UI::Col::FrameBg, vec4(0.11, 0.12, 0.14, 1.0));
-        UI::PushStyleVar(UI::StyleVar::FrameRounding, 2);
-        UI::ProgressBar(fillRatio, vec2(-1, 3), "");
+        UI::PushStyleVar(UI::StyleVar::FrameRounding, 3);
+        UI::ProgressBar(fillRatio, vec2(-1, 6), "");
         UI::PopStyleVar();
         UI::PopStyleColor(2);
     }
@@ -89,48 +104,91 @@ namespace AgentUI {
         UI::Dummy(vec2(0, 4));
 
         int pct = int(fillRatio * 100.0 + 0.5);
-        DrawStatPair("CTX", FormatTokenCount(usedTokens) + " / " + FormatTokenCount(maxTokens) + " (" + pct + "%)");
-        UI::SameLine();
-        UI::Dummy(vec2(8, 0));
-        UI::SameLine();
         vec4 remColor = remaining < 20000 ? vec4(0.96, 0.32, 0.30, 1.0) : vec4(0.88, 0.90, 0.93, 1.0);
-        DrawStatPairColor("REM", FormatTokenCount(remaining), remColor);
-        UI::SameLine();
-        UI::Dummy(vec2(8, 0));
-        UI::SameLine();
-        DrawStatPair("MSGS", "" + int(stats["messageCount"]));
+        array<string> topLabels = {"CTX", "REM", "MSGS"};
+        array<string> topValues = {
+            FormatTokenCount(usedTokens) + " / " + FormatTokenCount(maxTokens) + " (" + pct + "%)",
+            FormatTokenCount(remaining),
+            "" + int(stats["messageCount"])
+        };
+        array<vec4> topColors = {
+            vec4(0.88, 0.90, 0.93, 1.0),
+            remColor,
+            vec4(0.88, 0.90, 0.93, 1.0)
+        };
+        vec2 winPosTop = UI::GetWindowPos();
+        float rightEdgeTop = winPosTop.x + UI::GetWindowSize().x - 16;
+        float gapW = 14;
+        for (uint i = 0; i < topLabels.Length; i++) {
+            float chunkW = UI::MeasureString(topLabels[i]).x + 4 + UI::MeasureString(topValues[i]).x;
+            if (i > 0) {
+                vec4 prev = UI::GetItemRect();
+                float prevRight = prev.x + prev.z;
+                if (prevRight + gapW + chunkW < rightEdgeTop) {
+                    UI::SameLine();
+                    UI::Dummy(vec2(gapW - 8, 0));
+                    UI::SameLine();
+                }
+            }
+            DrawStatPairColor(topLabels[i], topValues[i], topColors[i]);
+        }
 
         UI::Dummy(vec2(0, 2));
 
         if (AccentCollapsingHeader("Token details")) {
-            if (UI::BeginTable("stats", 2, UI::TableFlags::SizingFixedSame)) {
-                UI::TableNextRow();
-                UI::TableNextColumn();
-                vec4 labelCol = vec4(0.45, 0.50, 0.58, 1.0);
-                vec4 accentCol = vec4(0.95, 0.65, 0.15, 1.0);
+            vec4 labelCol = vec4(0.45, 0.50, 0.58, 1.0);
+            vec4 sepCol = vec4(0.30, 0.33, 0.38, 1.0);
+            vec4 accentCol = vec4(0.95, 0.65, 0.15, 1.0);
+            bool compacted = bool(stats["hasCompactedHistory"]);
 
-                DrawStatRow("In", FormatTokenCount(g_LastInputTokens), labelCol);
-                UI::TableNextColumn();
-                DrawStatRow("Out", FormatTokenCount(g_LastOutputTokens), labelCol);
+            array<string> labels = {"In", "Out", "Session", "Summary", "History", "Tools"};
+            array<string> values = {
+                FormatTokenCount(g_LastInputTokens),
+                FormatTokenCount(g_LastOutputTokens),
+                FormatTokenCount(g_RunningOutputTokens),
+                FormatTokenCount(int(stats["summaryTokens"])),
+                FormatTokenCount(int(stats["historyTokens"])),
+                FormatTokenCount(int(stats["toolSchemaTokens"]))
+            };
 
-                UI::TableNextRow();
-                UI::TableNextColumn();
-                DrawStatRow("Total Out", FormatTokenCount(g_RunningOutputTokens), labelCol);
-                UI::TableNextColumn();
-                DrawStatRow("Sum", FormatTokenCount(int(stats["summaryTokens"])), labelCol);
+            vec2 winPos = UI::GetWindowPos();
+            float rightEdge = winPos.x + UI::GetWindowSize().x - 16;
+            float sepW = UI::MeasureString("\xC2\xB7").x + 8;
+            for (uint i = 0; i < labels.Length; i++) {
+                float chunkW = UI::MeasureString(labels[i]).x + 4 + UI::MeasureString(values[i]).x;
+                if (i > 0) {
+                    vec4 prev = UI::GetItemRect();
+                    float prevRight = prev.x + prev.z;
+                    if (prevRight + sepW + chunkW < rightEdge) {
+                        UI::SameLine();
+                        DrawInlineSep(sepCol);
+                        UI::SameLine();
+                    }
+                }
+                DrawInlineStat(labels[i], values[i], labelCol);
+            }
 
-                UI::TableNextRow();
-                UI::TableNextColumn();
-                DrawStatRow("Hist", FormatTokenCount(int(stats["historyTokens"])), labelCol);
-                UI::TableNextColumn();
-                DrawStatRow("Tools", FormatTokenCount(int(stats["toolSchemaTokens"])), labelCol);
-
-                UI::TableNextRow();
-                UI::TableNextColumn();
-                string compaction = bool(stats["hasCompactedHistory"]) ? "yes" : "no";
-                DrawStatRow("Compact", compaction, compaction == "yes" ? accentCol : labelCol);
-                UI::TableNextColumn();
-                UI::EndTable();
+            if (compacted) {
+                UI::Dummy(vec2(0, 2));
+                vec2 badgePos = UI::GetCursorPos();
+                float badgeAbsX = UI::GetWindowPos().x + badgePos.x;
+                float badgeAbsY = UI::GetWindowPos().y + badgePos.y - UI::GetScrollY();
+                string txt = Icons::Compress + "  Compacted";
+                vec2 sz = UI::MeasureString(txt);
+                float padX = 6;
+                float padY = 2;
+                auto dl = UI::GetWindowDrawList();
+                dl.AddRectFilled(
+                    vec4(badgeAbsX, badgeAbsY, sz.x + padX * 2, sz.y + padY * 2),
+                    vec4(accentCol.x, accentCol.y, accentCol.z, 0.18),
+                    3
+                );
+                UI::Dummy(vec2(padX, 0));
+                UI::SameLine(0, 0);
+                UI::PushStyleColor(UI::Col::Text, accentCol);
+                UI::Text(txt);
+                UI::PopStyleColor();
+                UI::Dummy(vec2(0, padY));
             }
         }
 
@@ -143,6 +201,22 @@ namespace AgentUI {
         UI::PopStyleColor();
         UI::SameLine();
         UI::Text(value);
+    }
+
+    void DrawInlineStat(const string &in label, const string &in value, const vec4 &in labelColor) {
+        UI::PushStyleColor(UI::Col::Text, labelColor);
+        UI::Text(label);
+        UI::PopStyleColor();
+        UI::SameLine(0, 4);
+        UI::PushFont(UI::Font::DefaultMono);
+        UI::Text(value);
+        UI::PopFont();
+    }
+
+    void DrawInlineSep(const vec4 &in color) {
+        UI::PushStyleColor(UI::Col::Text, color);
+        UI::Text("\xC2\xB7");
+        UI::PopStyleColor();
     }
 
     void DrawStatPair(const string &in label, const string &in value) {
@@ -190,7 +264,7 @@ namespace AgentUI {
         UI::PushStyleColor(UI::Col::Separator, vec4(0.18, 0.20, 0.24, 1.0));
         UI::PushStyleColor(UI::Col::Text, vec4(0.88, 0.90, 0.93, 1.0));
         UI::PushStyleColor(UI::Col::TextDisabled, vec4(0.48, 0.52, 0.58, 1.0));
-        UI::PushStyleColor(UI::Col::Border, vec4(0.95, 0.65, 0.15, 0.18));
+        UI::PushStyleColor(UI::Col::Border, vec4(0.30, 0.33, 0.38, 0.85));
 
         UI::PushStyleVar(UI::StyleVar::WindowPadding, vec2(12, 10));
         UI::PushStyleVar(UI::StyleVar::FramePadding, vec2(8, 5));
@@ -198,7 +272,10 @@ namespace AgentUI {
         UI::PushStyleVar(UI::StyleVar::FrameRounding, 4);
         UI::PushStyleVar(UI::StyleVar::WindowRounding, 5);
         UI::PushStyleVar(UI::StyleVar::GrabRounding, 3);
-        UI::PushStyleVar(UI::StyleVar::WindowBorderSize, 1);
+        // Suppress ImGui's built-in 1px border — BorderEffect::Swirl /
+        // BorderEffect::Static draw our own border inside the window scope
+        // so it respects z-order with overlapping windows.
+        UI::PushStyleVar(UI::StyleVar::WindowBorderSize, 0);
     }
 
     void PopTheme() {
@@ -213,10 +290,12 @@ namespace AgentUI {
         // Revert to Cond::FirstUseEver before shipping so users can drag/resize.
         UI::SetNextWindowSize(int(g_WindowWidth), int(g_WindowHeight), UI::Cond::Always);
         UI::SetNextWindowPos(int(g_WindowPos.x), int(g_WindowPos.y), UI::Cond::Always);
+        UI::SetNextWindowSizeConstraints(340, 360, 1600, 1400);
 
         PushTheme();
 
-        if (UI::Begin("TM Agent", AgentSettings::S_ShowWindow, UI::WindowFlags::NoCollapse)) {
+        int winFlags = UI::WindowFlags::NoCollapse;
+        if (UI::Begin(Icons::Rocket + "  TM Agent", AgentSettings::S_ShowWindow, winFlags)) {
             auto app = cast<CGameManiaPlanet>(GetApp());
             auto editor = app !is null ? cast<CGameCtnEditorFree>(app.Editor) : null;
 
@@ -228,17 +307,64 @@ namespace AgentUI {
                 UI::Separator();
                 DrawMessages();
                 DrawInput();
-                DrawSettings();
+                DrawBottomToolbar();
             }
 
             auto winSize = UI::GetWindowSize();
             g_WindowWidth = winSize.x;
             g_WindowHeight = winSize.y;
             g_WindowPos = UI::GetWindowPos();
+
+            // Fancy animated border only inside the editor — the waiting
+            // state gets a plain solid border instead.
+            if (editor !is null) {
+                BorderEffect::Swirl();
+            } else {
+                BorderEffect::Static();
+            }
         }
         UI::End();
 
         PopTheme();
+
+        if (g_ShowSettings) {
+            RenderSettingsWindow();
+        }
+    }
+
+    void DrawCustomTitleBar() {
+        vec4 amber = vec4(0.95, 0.65, 0.15, 1.0);
+        vec4 titleCol = vec4(0.78, 0.82, 0.88, 1.0);
+        vec4 ruleCol = vec4(0.20, 0.23, 0.28, 1.0);
+
+        float barH = 20;
+        vec2 winPos = UI::GetWindowPos();
+        float winW = UI::GetWindowSize().x;
+        vec2 cur = UI::GetCursorPos();
+        float absY = winPos.y + cur.y;
+        auto dl = UI::GetWindowDrawList();
+
+        dl.AddLine(vec2(winPos.x + 8, absY + barH), vec2(winPos.x + winW - 8, absY + barH), ruleCol, 1);
+
+        float glyphY = absY + barH * 0.5 - 2.5;
+        dl.AddRectFilled(vec4(winPos.x + 10, glyphY, 5, 5), amber, 1);
+
+        dl.AddText(vec2(winPos.x + 22, absY + 3), titleCol, "TM AGENT");
+
+        float closeSize = 14;
+        UI::SetCursorPos(vec2(winW - closeSize - 8, cur.y + (barH - closeSize) * 0.5));
+        UI::PushStyleColor(UI::Col::Button, vec4(0, 0, 0, 0));
+        UI::PushStyleColor(UI::Col::ButtonHovered, vec4(0.96, 0.32, 0.30, 0.30));
+        UI::PushStyleColor(UI::Col::ButtonActive, vec4(0.96, 0.32, 0.30, 0.50));
+        UI::PushStyleColor(UI::Col::Text, vec4(0.50, 0.54, 0.60, 1.0));
+        UI::PushStyleVar(UI::StyleVar::FramePadding, vec2(2, 1));
+        if (UI::Button(Icons::Times + "##close", vec2(closeSize, closeSize))) {
+            AgentSettings::S_ShowWindow = false;
+        }
+        UI::PopStyleVar();
+        UI::PopStyleColor(4);
+
+        UI::SetCursorPos(vec2(cur.x, cur.y + barH + 2));
     }
 
     void DrawCenteredText(const string &in s, const vec4 &in color) {
@@ -264,6 +390,20 @@ namespace AgentUI {
         DrawCenteredText("T M   \xE2\x80\xA2   A G E N T", vec4(0.32, 0.38, 0.46, 1.0));
     }
 
+    // Unified slow breathing cycle used across the waiting-state UI so
+    // every pulsing element (icon badge, ornament, etc) breathes together.
+    // Returns 0..1 with a ~6s period. `periodSec` lets callers retune locally.
+    float BreathPulse(float periodSec = 6.0) {
+        float t = float(Time::Now) / 1000.0;
+        float omega = Math::PI * 2.0 / periodSec;
+        return 0.5 - 0.5 * Math::Cos(t * omega);
+    }
+
+    // Interpolate color.a against a pulse-weighted range (base..base+amp).
+    vec4 PulsedAlpha(const vec4 &in c, float base, float amp, float pulse) {
+        return vec4(c.x, c.y, c.z, base + amp * pulse);
+    }
+
     void DrawCenteredOrnament(float width, const vec4 &in color) {
         vec2 winPos = UI::GetWindowPos();
         float winW = UI::GetWindowSize().x;
@@ -272,9 +412,17 @@ namespace AgentUI {
         float leftX = winPos.x + (winW - width) * 0.5;
         float midX = winPos.x + winW * 0.5;
         auto dl = UI::GetWindowDrawList();
-        dl.AddLine(vec2(leftX, y + 4), vec2(midX - 6, y + 4), color, 1);
-        dl.AddLine(vec2(midX + 6, y + 4), vec2(leftX + width, y + 4), color, 1);
-        dl.AddCircleFilled(vec2(midX, y + 4), 2, color);
+
+        float pulse = BreathPulse();
+        vec4 lineCol = vec4(color.x, color.y, color.z, color.w * (0.55 + 0.45 * pulse));
+        vec4 dotCol  = PulsedAlpha(color, 0.35, 0.55, pulse);
+        float dotR = 2.0 + 1.2 * pulse;
+
+        dl.AddLine(vec2(leftX, y + 4), vec2(midX - 8, y + 4), lineCol, 1);
+        dl.AddLine(vec2(midX + 8, y + 4), vec2(leftX + width, y + 4), lineCol, 1);
+        vec4 glowCol = PulsedAlpha(color, 0.08, 0.12, pulse);
+        dl.AddCircleFilled(vec2(midX, y + 4), dotR + 3.0, glowCol);
+        dl.AddCircleFilled(vec2(midX, y + 4), dotR, dotCol);
         UI::Dummy(vec2(0, 10));
     }
 
@@ -306,6 +454,24 @@ namespace AgentUI {
         float absY = winPos.y + cur.y - UI::GetScrollY();
 
         auto dl = UI::GetWindowDrawList();
+
+        // Soft breathing halo behind the badge — many thin concentric
+        // rounded rects with decreasing alpha, summing to a continuous
+        // glow rather than visible discrete rings. Expands on pulse peak.
+        float pulse = BreathPulse();
+        float cx = absX + size * 0.5;
+        float cy = absY + size * 0.5;
+        int rings = 10;
+        float maxExtra = 14.0 + 10.0 * pulse;
+        for (int i = rings; i >= 1; i--) {
+            float f = float(i) / float(rings);
+            float ring = size + f * maxExtra * 2.0;
+            float a = (0.035 + 0.04 * pulse) * (1.0 - f);
+            vec4 haloCol = vec4(strokeColor.x, strokeColor.y, strokeColor.z, a);
+            float r = 8.0 + f * 14.0;
+            dl.AddRectFilled(vec4(cx - ring * 0.5, cy - ring * 0.5, ring, ring), haloCol, r);
+        }
+
         dl.AddRectFilled(vec4(absX, absY, size, size), fillColor, 8);
         dl.AddRect(vec4(absX, absY, size, size), strokeColor, 8, 1);
 
@@ -322,29 +488,82 @@ namespace AgentUI {
         vec2 winSize = UI::GetWindowSize();
         vec2 cur = UI::GetCursorPos();
         auto dl = UI::GetWindowDrawList();
-        float y = winPos.y + cur.y - UI::GetScrollY();
+        // Subtract our pushed WindowPadding.y (10) so the accent sits flush
+        // with the bottom of the titlebar instead of floating below it.
+        float y = winPos.y + cur.y - UI::GetScrollY() - 10;
         dl.AddRectFilledMultiColor(vec4(winPos.x, y, winSize.x, 2), accent, accentFade, accentFade, accent);
         UI::Dummy(vec2(0, 6));
     }
 
+    // Shared settings gear button. Draws a square icon button with the gear
+    // glyph centered via drawlist — ImGui's built-in text centering with
+    // asymmetric FramePadding(8,5) and the cog glyph's metrics lands the
+    // icon slightly off-center, so we compute the position manually.
+    void DrawSettingsButton(const string &in idSuffix) {
+        float size = UI::GetFrameHeight();
+        vec2 btnMin = UI::GetCursorScreenPos();
+        bool clicked = UI::Button("##settings_" + idSuffix, vec2(size, size));
+        vec2 iconSize = UI::MeasureString(Icons::Cog);
+        vec4 textCol = UI::GetStyleColor(UI::Col::Text);
+        UI::GetWindowDrawList().AddText(
+            vec2(
+                btnMin.x + (size - iconSize.x) * 0.5,
+                btnMin.y + (size - iconSize.y) * 0.5
+            ),
+            textCol,
+            Icons::Cog
+        );
+        if (clicked) g_ShowSettings = !g_ShowSettings;
+        if (UI::IsItemHovered()) UI::SetTooltip("Settings");
+    }
+
+    void StartProviderTest() {
+        if (g_TestRunning) return;
+        g_TestRunning = true;
+        g_TestResult = "Testing…";
+        g_TestColor = vec4(0.98, 0.70, 0.22, 1.0);
+        // Coro lives at global scope (see below) — calling imported funcs
+        // like AiApi::OpenAI_Complete through a namespace-scoped coro
+        // entrypoint produced "Unbound function called" at runtime.
+        startnew(::ProviderTestCoro);
+    }
+
     void DrawNotInEditor() {
-        vec4 accent = vec4(0.95, 0.65, 0.15, 1.0);
-        vec4 badgeFill = vec4(0.18, 0.13, 0.05, 1.0);
-        vec4 badgeStroke = vec4(0.95, 0.65, 0.15, 0.35);
-        vec4 iconColor = vec4(0.95, 0.65, 0.15, 1.0);
+        vec4 headingCol = vec4(0.78, 0.82, 0.88, 1.0);
+        // Slow breath cycle — unified across waiting-state elements
+        // (icon badge, ornament dot) via BreathPulse() so they all
+        // inhale/exhale together, matching the wave across the title.
+        float pulse = BreathPulse();
+        vec4 amber = vec4(0.95, 0.65, 0.15, 1.0);
+        vec4 badgeFill   = PulsedAlpha(amber, 0.06, 0.06, pulse);
+        vec4 badgeStroke = PulsedAlpha(amber, 0.18, 0.18, pulse);
+        vec4 iconColor   = PulsedAlpha(amber, 0.72, 0.20, pulse);
+
+        // Floating gear, top-right. Save/restore cursor so the rest of the
+        // waiting layout flows from the top unchanged.
+        vec2 savedCursor = UI::GetCursorPos();
+        float gearSize = UI::GetFrameHeight();
+        UI::SetCursorPos(vec2(UI::GetWindowSize().x - gearSize - 12, savedCursor.y));
+        DrawSettingsButton("wait");
+        UI::SetCursorPos(savedCursor);
 
         DrawAmberTitleAccent();
 
         float availH = UI::GetContentRegionAvail().y;
         UI::Dummy(vec2(0, Math::Max(availH * 0.15, 12.0)));
 
-        DrawIconBadge(56, Icons::ExclamationTriangle, badgeFill, badgeStroke, iconColor);
+        DrawIconBadge(56, Icons::MapO, badgeFill, badgeStroke, iconColor);
 
         UI::Dummy(vec2(0, 22));
 
         UI::PushFont(UI::Font::DefaultBold);
-        UI::PushFontSize(22);
-        DrawCenteredText("W A I T I N G   F O R   E D I T O R", accent);
+        UI::PushFontSize(18);
+        TextEffect::WaveCentered(
+            "WAITING FOR EDITOR",
+            -1.0,
+            headingCol,
+            vec4(1.00, 0.88, 0.45, 1.0)
+        );
         UI::PopFontSize();
         UI::PopFont();
 
@@ -369,50 +588,78 @@ namespace AgentUI {
         DrawBrandFooter();
     }
 
+    string TruncateToWidth(const string &in s, float maxW) {
+        if (UI::MeasureString(s).x <= maxW) return s;
+        string ell = "\xE2\x80\xA6";
+        string result = s;
+        while (result.Length > 0 && UI::MeasureString(result + ell).x > maxW) {
+            result = result.SubStr(0, result.Length - 1);
+        }
+        return result + ell;
+    }
+
+    void DrawStatusPill(const string &in label, const vec4 &in color) {
+        vec2 pad = vec2(7, 2);
+        vec2 textSize = UI::MeasureString(label);
+        vec2 pillSize = textSize + pad * 2;
+        float framePadY = 5;
+        vec2 cur = UI::GetCursorPos();
+        vec2 abs = UI::GetWindowPos() + cur - vec2(0, UI::GetScrollY());
+        float pillY = abs.y + framePadY - pad.y;
+        auto dl = UI::GetWindowDrawList();
+        vec4 fill = vec4(color.x, color.y, color.z, 0.22);
+        dl.AddRectFilled(vec4(abs.x, pillY, pillSize.x, pillSize.y), fill, pillSize.y * 0.5);
+        dl.AddText(vec2(abs.x + pad.x, pillY + pad.y), color, label);
+        UI::Dummy(vec2(pillSize.x + 2, pillSize.y + framePadY));
+    }
+
     void DrawHeader() {
         vec4 idleColor = vec4(0.00, 0.82, 0.95, 1.0);
         vec4 runColor = vec4(0.98, 0.70, 0.22, 1.0);
         vec4 errColor = vec4(0.96, 0.32, 0.30, 1.0);
 
         if (g_Status.StartsWith("Error:")) {
-            DrawColoredText(errColor, "Turn " + g_CurrentTurn + "." + g_StepCount);
+            DrawStatusPill(g_Status.ToUpper(), errColor);
+        } else if (g_Status == "Idle") {
+            DrawStatusPill("IDLE", idleColor);
+        } else if (g_Status == "Running" || g_Status == "Calling LLM...") {
+            DrawStatusPill(g_Status.ToUpper(), runColor);
             UI::SameLine();
-            DrawColoredText(errColor, g_Status);
+            UI::AlignTextToFramePadding();
+            string thinking = g_Status == "Calling LLM..." ? "calling llm" : "thinking";
+            TextEffect::DoubleWave(
+                thinking,
+                -1.0,
+                vec4(0.40, 0.44, 0.50, 1.0),
+                vec4(0.98, 0.70, 0.22, 1.0),
+                vec4(0.00, 0.82, 0.95, 1.0),
+                1.0, -1.0,
+                2.0,
+                5.0, 7.0, 0.0
+            );
         } else {
-            UI::Text("Turn " + g_CurrentTurn + "." + g_StepCount);
-            UI::SameLine();
-
-            if (g_Status == "Idle") {
-                DrawColoredText(idleColor, "[Idle]");
-            } else if (g_Status == "Running" || g_Status == "Calling LLM...") {
-                DrawColoredText(runColor, "[" + g_Status + "]");
-                UI::SameLine();
-                int dotCount = (Time::Now / 300) % 4;
-                string dots = "";
-                for (int i = 0; i < dotCount; i++) dots += ".";
-                for (int i = dotCount; i < 3; i++) dots += " ";
-                UI::TextDisabled(dots);
-            } else {
-                DrawColoredText(errColor, "[" + g_Status + "]");
-            }
+            DrawStatusPill(g_Status.ToUpper(), errColor);
         }
 
         UI::SameLine();
-        vec4 dotColor = vec4(0.00, 0.82, 0.95, 1.0);
-        DrawColoredText(dotColor, "  \xE2\x80\xA2  ");
-        UI::SameLine();
-        UI::TextDisabled(CurrentProviderLabel() + " / " + CurrentModelLabel());
-
-        UI::SameLine();
-        UI::SetCursorPosX(UI::GetWindowSize().x - 70);
-        UI::PushStyleColor(UI::Col::Button, vec4(0, 0, 0, 0));
-        UI::PushStyleColor(UI::Col::ButtonHovered, vec4(0.00, 0.82, 0.95, 0.18));
-        UI::PushStyleColor(UI::Col::ButtonActive, vec4(0.00, 0.82, 0.95, 0.30));
-        UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.62, 0.70, 1.0));
-        if (UI::Button("Clear")) {
-            ClearMessages();
+        UI::AlignTextToFramePadding();
+        UI::PushFont(UI::Font::DefaultMono);
+        UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
+        string modelText = CurrentProviderLabel() + " / " + CurrentModelLabel();
+        string turnText = "t" + g_CurrentTurn + "\xC2\xB7s" + g_StepCount;
+        string combined = modelText + "   " + turnText;
+        vec2 combinedSize = UI::MeasureString(combined);
+        float rightEdge = UI::GetWindowSize().x - 12;
+        float cursorX = UI::GetCursorPos().x;
+        float availableW = rightEdge - cursorX;
+        if (combinedSize.x <= availableW) {
+            UI::SetCursorPosX(rightEdge - combinedSize.x);
+            UI::Text(combined);
+        } else {
+            UI::Text(TruncateToWidth(modelText, availableW));
         }
-        UI::PopStyleColor(4);
+        UI::PopStyleColor();
+        UI::PopFont();
 
         UI::PushStyleColor(UI::Col::Separator, vec4(0.00, 0.82, 0.95, 0.35));
         UI::Separator();
@@ -420,7 +667,7 @@ namespace AgentUI {
     }
 
     void DrawMessages() {
-        float bottomReserve = 150;
+        float bottomReserve = 190;
 
         UI::PushStyleColor(UI::Col::ChildBg, vec4(0.035, 0.042, 0.055, 1.0));
         UI::PushStyleVar(UI::StyleVar::ChildRounding, 6);
@@ -436,7 +683,10 @@ namespace AgentUI {
                 auto @msg = g_Messages[i];
                 DrawMessage(msg);
             }
-            UI::SetScrollHereY(1.0f);
+            if (g_PendingScrollBottom) {
+                UI::SetScrollHereY(1.0f);
+                g_PendingScrollBottom = false;
+            }
         }
 
         UI::EndChild();
@@ -448,36 +698,84 @@ namespace AgentUI {
     void DrawIdlePlaceholder() {
         vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
 
-        UI::Dummy(vec2(0, 16));
-        UI::PushStyleColor(UI::Col::Text, accent);
+        UI::Dummy(vec2(0, 12));
+
+        vec2 cardStart = UI::GetCursorPos();
+        float cardX = UI::GetWindowPos().x + cardStart.x;
+        float cardY = UI::GetWindowPos().y + cardStart.y - UI::GetScrollY();
+        auto dl = UI::GetWindowDrawList();
+
+        UI::Indent(14);
+        UI::PushStyleColor(UI::Col::Text, vec4(0.88, 0.90, 0.93, 1.0));
         UI::PushFont(UI::Font::DefaultBold);
-        UI::PushFontSize(20);
-        UI::Text("  TM AGENT");
-        UI::PopFontSize();
+        UI::Text("How can I help?");
         UI::PopFont();
         UI::PopStyleColor();
-        UI::Dummy(vec2(0, 2));
-        UI::Indent(10);
-        UI::TextWrapped("Your in-editor copilot. Inspect the map, find blocks or items, and place things at the cursor.");
-        UI::Dummy(vec2(0, 10));
-
-        UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
-        UI::Text("TRY");
+        UI::Dummy(vec2(0, 4));
+        UI::PushStyleColor(UI::Col::Text, vec4(0.65, 0.70, 0.76, 1.0));
+        UI::TextWrapped("Inspect the map, find blocks or items, and place things at the cursor.");
         UI::PopStyleColor();
-        UI::Dummy(vec2(0, 2));
+        UI::Dummy(vec2(0, 12));
+
+        UI::PushStyleColor(UI::Col::Text, vec4(0.40, 0.45, 0.52, 1.0));
+        UI::Text("T R Y");
+        UI::PopStyleColor();
+        UI::Dummy(vec2(0, 4));
 
         DrawExampleLine(accent, "What's on the current map?");
         DrawExampleLine(accent, "Place a start block at the cursor.");
         DrawExampleLine(accent, "Find road blocks with 'dirt' in the name.");
-        UI::Unindent(10);
+        UI::Unindent(14);
+
+        vec2 cardEnd = UI::GetCursorPos();
+        float cardH = cardEnd.y - cardStart.y;
+        dl.AddRectFilled(vec4(cardX + 2, cardY, 3, cardH - 4), accent, 1);
     }
 
     void DrawExampleLine(const vec4 &in accent, const string &in example) {
+        UI::PushStyleColor(UI::Col::Header, vec4(accent.x, accent.y, accent.z, 0.10));
+        UI::PushStyleColor(UI::Col::HeaderHovered, vec4(accent.x, accent.y, accent.z, 0.18));
+        UI::PushStyleColor(UI::Col::HeaderActive, vec4(accent.x, accent.y, accent.z, 0.28));
+        UI::PushStyleColor(UI::Col::Text, vec4(0.78, 0.82, 0.88, 1.0));
+        string label = "  " + Icons::AngleRight + "  " + example + "##ex-" + example;
+        if (UI::Selectable(label, false)) {
+            g_InputText = example;
+        }
+        UI::PopStyleColor(4);
+    }
+
+    void DrawBubble(const string &in label, const vec4 &in accent, const string &in body) {
+        float padX = 10;
+        float padY = 8;
+        float barW = 2;
+
+        UI::Dummy(vec2(0, 4));
+        vec2 cur = UI::GetCursorPos();
+        float absX = UI::GetWindowPos().x + cur.x;
+        float absYStart = UI::GetWindowPos().y + cur.y - UI::GetScrollY();
+        float availW = UI::GetContentRegionAvail().x;
+        auto dl = UI::GetWindowDrawList();
+
+        UI::Dummy(vec2(0, padY - 4));
+        UI::Indent(padX + barW);
+        UI::PushTextWrapPos(UI::GetCursorPos().x + availW - padX * 2 - barW);
         UI::PushStyleColor(UI::Col::Text, accent);
-        UI::Text("  >");
+        UI::PushFont(UI::Font::DefaultBold);
+        UI::Text(label);
+        UI::PopFont();
         UI::PopStyleColor();
-        UI::SameLine();
-        UI::Text(example);
+        UI::Dummy(vec2(0, 2));
+        UI::TextWrapped(body);
+        UI::PopTextWrapPos();
+        UI::Unindent(padX + barW);
+        UI::Dummy(vec2(0, padY - 4));
+
+        vec2 curEnd = UI::GetCursorPos();
+        float absYEnd = UI::GetWindowPos().y + curEnd.y - UI::GetScrollY();
+
+        vec4 bg = vec4(accent.x, accent.y, accent.z, 0.06);
+        dl.AddRectFilled(vec4(absX, absYStart, availW, absYEnd - absYStart - 4), bg, 4);
+        dl.AddRectFilled(vec4(absX, absYStart, barW, absYEnd - absYStart - 4), accent, 1);
     }
 
     void DrawMessage(Message@ msg) {
@@ -485,15 +783,9 @@ namespace AgentUI {
         vec4 agentAccent = vec4(0.00, 0.82, 0.95, 1.0);
 
         if (msg.type == MsgType::User) {
-            UI::Dummy(vec2(0, 4));
-            DrawColoredText(userAccent, "YOU");
-            UI::TextWrapped(msg.content);
-            UI::Dummy(vec2(0, 6));
+            DrawBubble("YOU", userAccent, msg.content);
         } else if (msg.type == MsgType::Assistant) {
-            UI::Dummy(vec2(0, 4));
-            DrawColoredText(agentAccent, "AGENT");
-            UI::TextWrapped(msg.content);
-            UI::Dummy(vec2(0, 6));
+            DrawBubble("AGENT", agentAccent, msg.content);
         } else if (msg.type == MsgType::ToolCall) {
             UI::Indent();
             if (UI::TreeNode(msg.toolName + "()")) {
@@ -514,19 +806,34 @@ namespace AgentUI {
     }
 
     void DrawInput() {
-        UI::Separator();
+        vec2 startPos = UI::GetCursorPos();
+        float winW = UI::GetWindowSize().x;
+        float absX = UI::GetWindowPos().x + startPos.x;
+        float absY = UI::GetWindowPos().y + startPos.y - UI::GetScrollY();
+        auto dl = UI::GetWindowDrawList();
+        dl.AddLine(vec2(absX, absY), vec2(absX + winW - startPos.x * 2, absY), vec4(0.30, 0.33, 0.38, 1.0), 1);
+        UI::Dummy(vec2(0, 6));
 
-        float inputHeight = 96;
+        float inputHeight = 84;
         float inputWidth = UI::GetWindowContentRegionWidth() - 84;
 
         g_InputText = UI::InputTextMultiline("##input", g_InputText, vec2(inputWidth, inputHeight));
+        bool inputEmpty = g_InputText.Length == 0;
+        if (inputEmpty && !UI::IsItemActive()) {
+            vec4 inRect = UI::GetItemRect();
+            auto dl2 = UI::GetWindowDrawList();
+            dl2.AddText(vec2(inRect.x + 10, inRect.y + 8), vec4(0.40, 0.44, 0.50, 1.0), "Ask about the map, place blocks, find items\xE2\x80\xA6");
+        }
 
         UI::SameLine();
-        UI::PushStyleColor(UI::Col::Button, vec4(0.95, 0.65, 0.15, 0.12));
-        UI::PushStyleColor(UI::Col::ButtonHovered, vec4(0.95, 0.65, 0.15, 0.26));
-        UI::PushStyleColor(UI::Col::ButtonActive, vec4(0.95, 0.65, 0.15, 0.42));
-        UI::PushStyleColor(UI::Col::Border, vec4(0.95, 0.65, 0.15, 0.55));
-        UI::PushStyleColor(UI::Col::Text, vec4(0.95, 0.65, 0.15, 1.0));
+        float fillA = inputEmpty ? 0.06 : 0.28;
+        float borderA = inputEmpty ? 0.25 : 0.70;
+        float textA = inputEmpty ? 0.65 : 1.0;
+        UI::PushStyleColor(UI::Col::Button, vec4(0.00, 0.82, 0.95, fillA));
+        UI::PushStyleColor(UI::Col::ButtonHovered, vec4(0.00, 0.82, 0.95, 0.42));
+        UI::PushStyleColor(UI::Col::ButtonActive, vec4(0.00, 0.82, 0.95, 0.60));
+        UI::PushStyleColor(UI::Col::Border, vec4(0.00, 0.82, 0.95, borderA));
+        UI::PushStyleColor(UI::Col::Text, vec4(0.85, 0.97, 1.00, textA));
         UI::PushStyleVar(UI::StyleVar::FrameBorderSize, 1);
         if (UI::Button("Send", vec2(72, inputHeight))) {
             if (g_InputText.Length > 0) {
@@ -534,57 +841,161 @@ namespace AgentUI {
                 g_InputText = "";
             }
         }
-        UI::PopStyleColor(5);
         UI::PopStyleVar();
+        UI::PopStyleColor(5);
     }
 
-    void DrawSettings() {
-        if (AccentCollapsingHeader("Settings")) {
-            UI::Indent();
+    void DrawBottomToolbar() {
+        UI::Dummy(vec2(0, 4));
 
-            string currentProvider = AgentSettings::S_Provider == Provider::MiniMax ? "minimax" : "openai";
+        Json::Value@ tools = ToolAssembler::GetToolList();
+        Json::Value@ stats = LlmHistory::BuildContextStats(tools, AgentSettings::S_MaxHistoryTokens);
+        int usedTokens = int(stats["estimatedTotalTokens"]);
+        bool showCompact = usedTokens >= AgentSettings::S_CompactButtonThreshold;
+
+        vec4 subtleFill = vec4(0.55, 0.60, 0.68, 0.08);
+        vec4 subtleHover = vec4(0.55, 0.60, 0.68, 0.18);
+        vec4 subtleActive = vec4(0.55, 0.60, 0.68, 0.32);
+        vec4 subtleBorder = vec4(0.55, 0.60, 0.68, 0.30);
+        vec4 subtleText = vec4(0.72, 0.76, 0.82, 1.0);
+
+        UI::PushStyleColor(UI::Col::Button, subtleFill);
+        UI::PushStyleColor(UI::Col::ButtonHovered, subtleHover);
+        UI::PushStyleColor(UI::Col::ButtonActive, subtleActive);
+        UI::PushStyleColor(UI::Col::Border, subtleBorder);
+        UI::PushStyleColor(UI::Col::Text, subtleText);
+        UI::PushStyleVar(UI::StyleVar::FrameBorderSize, 1);
+
+        if (UI::Button(Icons::PlusCircle + "  New##chat")) {
+            ClearMessages();
+        }
+        if (UI::IsItemHovered()) UI::SetTooltip("Start a new conversation (clears history)");
+
+        if (showCompact) {
+            UI::SameLine(0, 6);
+            int pct = int(float(usedTokens) / float(AgentSettings::S_MaxHistoryTokens) * 100.0 + 0.5);
+            if (UI::Button(Icons::Compress + "  Compact##ctx")) {
+                LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens);
+            }
+            if (UI::IsItemHovered()) UI::SetTooltip("Summarize earlier turns to free context\nCurrent: " + FormatTokenCount(usedTokens) + " tokens (" + pct + "%)");
+        }
+
+        float gearSize = UI::GetFrameHeight();
+        UI::SameLine();
+        UI::SetCursorPosX(UI::GetWindowSize().x - gearSize - 12);
+        DrawSettingsButton("toolbar");
+
+        UI::PopStyleVar();
+        UI::PopStyleColor(5);
+    }
+
+    void DrawSectionHeader(const string &in title) {
+        vec4 sectionCol = vec4(0.00, 0.82, 0.95, 0.85);
+        UI::Dummy(vec2(0, 2));
+        UI::PushFont(UI::Font::DefaultBold);
+        UI::PushStyleColor(UI::Col::Text, sectionCol);
+        UI::Text(title);
+        UI::PopStyleColor();
+        UI::PopFont();
+
+        // Custom cyan-tinted separator that belongs with the heading rather
+        // than ImGui's default gray line that reads as "end of group".
+        vec4 lineStart = vec4(0.00, 0.82, 0.95, 0.35);
+        vec4 lineEnd = vec4(0.00, 0.82, 0.95, 0.03);
+        vec2 winPos = UI::GetWindowPos();
+        vec2 winSize = UI::GetWindowSize();
+        float y = winPos.y + UI::GetCursorPos().y - UI::GetScrollY() + 1;
+        auto dl = UI::GetWindowDrawList();
+        dl.AddRectFilledMultiColor(
+            vec4(winPos.x + 8, y, winSize.x - 16, 1),
+            lineStart, lineEnd, lineEnd, lineStart
+        );
+        UI::Dummy(vec2(0, 5));
+    }
+
+    void RenderSettingsWindow() {
+        PushTheme();
+        UI::SetNextWindowSize(420, 0, UI::Cond::FirstUseEver);
+        UI::SetNextWindowSizeConstraints(360, 200, 800, 1200);
+        int sFlags = UI::WindowFlags::NoCollapse | UI::WindowFlags::AlwaysAutoResize;
+        if (UI::Begin(Icons::Cog + "  TM Agent Settings", g_ShowSettings, sFlags)) {
+            g_SettingsPos = UI::GetWindowPos();
+            g_SettingsSize = UI::GetWindowSize();
+            DrawAmberTitleAccent();
+            int keyFlags = UI::InputTextFlags::Password;
+
+            DrawSectionHeader("PROVIDER");
+            string currentProvider = AgentSettings::S_Provider == Provider::MiniMax ? "MiniMax" : "OpenAI";
             if (UI::BeginCombo("Provider", currentProvider)) {
-                if (UI::Selectable("minimax", AgentSettings::S_Provider == Provider::MiniMax)) {
+                if (UI::Selectable("MiniMax", AgentSettings::S_Provider == Provider::MiniMax)) {
                     AgentSettings::S_Provider = Provider::MiniMax;
                 }
-                if (UI::Selectable("openai", AgentSettings::S_Provider == Provider::OpenAI)) {
+                if (UI::Selectable("OpenAI", AgentSettings::S_Provider == Provider::OpenAI)) {
                     AgentSettings::S_Provider = Provider::OpenAI;
                 }
                 UI::EndCombo();
             }
 
             if (AgentSettings::S_Provider == Provider::MiniMax) {
-                UI::InputText("MiniMax API Key", AgentSettings::S_MiniMaxApiKey);
-                UI::InputText("MiniMax Model", AgentSettings::S_MiniMaxModel);
+                DrawSectionHeader("MINIMAX");
+                AgentSettings::S_MiniMaxApiKey = UI::InputText("API Key", AgentSettings::S_MiniMaxApiKey, keyFlags);
+                AgentSettings::S_MiniMaxModel = UI::InputText("Model", AgentSettings::S_MiniMaxModel);
             } else {
-                UI::InputText("OpenAI API Key", AgentSettings::S_OpenAIApiKey);
-                UI::InputText("OpenAI Model", AgentSettings::S_OpenAIModel);
+                DrawSectionHeader("OPENAI");
+                AgentSettings::S_OpenAIApiKey = UI::InputText("API Key", AgentSettings::S_OpenAIApiKey, keyFlags);
+                AgentSettings::S_OpenAIModel = UI::InputText("Model", AgentSettings::S_OpenAIModel);
                 string currentEffort = AgentSettings::S_OpenAIReasoningEffort;
-                if (UI::BeginCombo("OpenAI Effort", currentEffort)) {
-                    if (UI::Selectable("none", currentEffort == "none")) {
-                        AgentSettings::S_OpenAIReasoningEffort = "none";
-                    }
-                    if (UI::Selectable("minimal", currentEffort == "minimal")) {
-                        AgentSettings::S_OpenAIReasoningEffort = "minimal";
-                    }
-                    if (UI::Selectable("low", currentEffort == "low")) {
-                        AgentSettings::S_OpenAIReasoningEffort = "low";
-                    }
-                    if (UI::Selectable("medium", currentEffort == "medium")) {
-                        AgentSettings::S_OpenAIReasoningEffort = "medium";
-                    }
-                    if (UI::Selectable("high", currentEffort == "high")) {
-                        AgentSettings::S_OpenAIReasoningEffort = "high";
-                    }
-                    if (UI::Selectable("xhigh", currentEffort == "xhigh")) {
-                        AgentSettings::S_OpenAIReasoningEffort = "xhigh";
+                if (UI::BeginCombo("Reasoning Effort", currentEffort)) {
+                    array<string> efforts = { "none", "minimal", "low", "medium", "high", "xhigh" };
+                    for (uint i = 0; i < efforts.Length; i++) {
+                        if (UI::Selectable(efforts[i], currentEffort == efforts[i])) {
+                            AgentSettings::S_OpenAIReasoningEffort = efforts[i];
+                        }
                     }
                     UI::EndCombo();
                 }
             }
 
-            UI::Unindent();
+            // Provider Test — sends a single "ping" request to confirm the
+            // key+model combo is actually reachable. Status renders inline.
+            UI::Dummy(vec2(0, 2));
+            UI::BeginDisabled(g_TestRunning);
+            if (UI::Button(Icons::Bolt + "  Test Provider##providertest")) {
+                StartProviderTest();
+            }
+            UI::EndDisabled();
+            if (g_TestResult.Length > 0) {
+                UI::SameLine(0, 10);
+                UI::AlignTextToFramePadding();
+                UI::PushStyleColor(UI::Col::Text, g_TestColor);
+                UI::Text(g_TestResult);
+                UI::PopStyleColor();
+            }
+
+            DrawSectionHeader("CONTEXT");
+            AgentSettings::S_MaxHistoryTokens = UI::SliderInt(
+                "Max History Tokens", AgentSettings::S_MaxHistoryTokens, 16000, 200000, "%d tok"
+            );
+            if (UI::IsItemHovered()) UI::SetTooltip("Hard ceiling — older messages get compacted above this.");
+
+            AgentSettings::S_CompactButtonThreshold = UI::SliderInt(
+                "Compact Button At", AgentSettings::S_CompactButtonThreshold, 4000, 200000, "%d tok"
+            );
+            if (UI::IsItemHovered()) UI::SetTooltip("Compact button appears in the toolbar once used context crosses this.");
+
+            UI::Dummy(vec2(0, 6));
+            UI::Separator();
+            UI::Dummy(vec2(0, 4));
+
+            // Right-align the close button so it anchors the window corner.
+            float closeW = UI::MeasureString(Icons::Times + "  Close").x + 20;
+            UI::SetCursorPosX(UI::GetWindowSize().x - closeW - 12);
+            if (UI::Button(Icons::Times + "  Close", vec2(closeW, UI::GetFrameHeight()))) {
+                g_ShowSettings = false;
+            }
         }
+        UI::End();
+        PopTheme();
     }
 
     void SendMessage(const string &in text) {
@@ -606,18 +1017,21 @@ namespace AgentUI {
 
     void AddMessage(MsgType t, const string &in content) {
         g_Messages.InsertLast(Message(t, content));
+        g_PendingScrollBottom = true;
     }
 
     void AddToolCall(const string &in toolName, const string &in inputJson) {
         auto msg = Message(MsgType::ToolCall, inputJson);
         msg.toolName = toolName;
         g_Messages.InsertLast(msg);
+        g_PendingScrollBottom = true;
     }
 
     void AddToolResult(const string &in toolName, const string &in result) {
         auto msg = Message(MsgType::ToolResult, result);
         msg.toolName = toolName;
         g_Messages.InsertLast(msg);
+        g_PendingScrollBottom = true;
     }
 
     void SetStatus(const string &in status) {
