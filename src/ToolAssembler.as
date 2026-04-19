@@ -229,4 +229,69 @@ namespace ToolAssembler {
     string GetToolResultJson(const Json::Value &in result) {
         return Json::Write(result);
     }
+
+    string GetEditorStateSnapshot() {
+        string state = "EDITOR STATE:\n";
+
+        Json::Value@ empty = Json::Object();
+
+        Json::Value@ mapInfo = GetMapInfo(empty);
+        if (mapInfo !is null && mapInfo.HasKey("output")) {
+            Json::Value@ mapOut = mapInfo["output"];
+            string mapName = mapOut.HasKey("name") ? string(mapOut["name"]) : "unknown";
+            string nbBlocks = mapOut.HasKey("nbBlocks") ? string(mapOut["nbBlocks"]) : "?";
+            string nbItems = mapOut.HasKey("nbItems") ? string(mapOut["nbItems"]) : "?";
+            state += "- Map: " + mapName + " (" + nbBlocks + " blocks, " + nbItems + " items)\n";
+        }
+
+        Json::Value@ cursor = GetCursor(empty);
+        if (cursor !is null && cursor.HasKey("output")) {
+            Json::Value@ curOut = cursor["output"];
+            string coord = curOut.HasKey("coord") ? Json::Write(curOut["coord"]) : "[?]";
+            string dir = curOut.HasKey("dir") ? string(curOut["dir"]) : "?";
+            string pickedBlock = "!";
+            string pickedItem = "!";
+            if (curOut.HasKey("pickedBlock") && curOut["pickedBlock"].GetType() != Json::Type::Null) {
+                pickedBlock = string(curOut["pickedBlock"]);
+            }
+            if (curOut.HasKey("pickedItem") && curOut["pickedItem"].GetType() != Json::Type::Null) {
+                pickedItem = string(curOut["pickedItem"]);
+            }
+            state += "- Cursor: " + coord + " dir=" + dir + " pickedBlock=" + pickedBlock + " pickedItem=" + pickedItem + "\n";
+        }
+
+        Json::Value@ placement = GetPlacementMode(empty);
+        if (placement !is null && placement.HasKey("output")) {
+            Json::Value@ placeOut = placement["output"];
+            if (placeOut.HasKey("mode")) {
+                state += "- Placement mode: " + string(placeOut["mode"]) + "\n";
+            }
+        }
+
+        Json::Value@ inv = GetInventorySummary(empty);
+        if (inv !is null && inv.HasKey("output")) {
+            Json::Value@ invOut = inv["output"];
+            string invStatus = "unknown";
+            string currentDir = "";
+            string selectedNode = "";
+            if (invOut.HasKey("loadingStatusShort")) {
+                invStatus = string(invOut["loadingStatusShort"]);
+            }
+            if (invOut.HasKey("currentDirectoryPath")) {
+                currentDir = string(invOut["currentDirectoryPath"]);
+            }
+            if (invOut.HasKey("currentSelectedNode") && invOut["currentSelectedNode"].GetType() != Json::Type::Null) {
+                Json::Value@ selNode = invOut["currentSelectedNode"];
+                if (selNode.HasKey("path")) {
+                    selectedNode = string(selNode["path"]);
+                }
+            }
+            state += "- Inventory: " + invStatus;
+            if (currentDir.Length > 0) state += " dir=" + currentDir;
+            if (selectedNode.Length > 0) state += " selected=" + selectedNode;
+            state += "\n";
+        }
+
+        return state.Trim();
+    }
 }

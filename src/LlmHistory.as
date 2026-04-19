@@ -10,7 +10,9 @@ namespace LlmHistory {
         + "- Coordinates are in block units. 1 block = 32 units horizontally, 8 units vertically\n"
         + "- Use GetBlocks() to explore the map before making changes\n"
         + "- After TestMap(), use GetRaceData() to see results\n"
-        + "- Be precise with coordinates";
+        + "- Be precise with coordinates\n"
+        + "- Always query the current editor state before guessing: call GetMapInfo, GetCursor, GetPlacementMode, and GetInventorySummary early in a session\n"
+        + "- When searching for blocks or items, prefer FindInventory with appropriate queries over guessing names";
 
     string TrimForSummary(const string &in text, uint maxLen = 180) {
         if (uint(text.Length) <= maxLen) return text;
@@ -250,6 +252,14 @@ namespace LlmHistory {
         system["role"] = "system";
         system["content"] = BuildSystemPrompt(tools);
         msgs.Add(system);
+
+        string editorState = ToolAssembler::GetEditorStateSnapshot();
+        if (editorState.Length > 0) {
+            Json::Value editorMsg = Json::Object();
+            editorMsg["role"] = "system";
+            editorMsg["content"] = editorState;
+            msgs.Add(editorMsg);
+        }
 
         if (g_CompactedSummary.Length > 0) {
             Json::Value summary = Json::Object();
