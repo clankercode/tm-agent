@@ -2,20 +2,23 @@
 
 ## Current State
 
-Inventory, compaction, UI stats, and improved system prompt work is complete and committed.
+Inventory, compaction, UI stats redesign, and improved system prompt work is complete and committed.
 
 - `tm-agent` build/test paths are green.
 - `tm-mcptm` exposes inventory summary/search tools.
 - `tm-agent` wires those tools into the assembled tool list and unit tests.
 - Dynamic editor state snapshot is injected as a system message on every LLM call.
+- UI stats redesigned with visual progress bar and color-coded token tracking.
+- Output/input token counts tracked from LLM API responses.
 - The tracked repos are clean at the time of this handoff.
 
 ## Commit Pointers
 
+- `tm-agent`: `0d2e365` - `Redesign UI stats with progress bar, color-coded token tracking, and output token stats`
 - `tm-agent`: `363aa51` - `Add dynamic editor state snapshot and improved system prompt guidance`
 - `tm-agent`: `89b7680` - `Wire inventory tools and context stats`
+- `tm-aiapi`: `24c49ba` - `Add usage token tracking to Anthropic and OpenAI API responses`
 - `tm-mcptm`: `55bc0da` - `Add inventory MCP search tools`
-- `tm-aiapi`: `c40a5a1` - `Add build script and export module, fix JSON API usage`
 
 ## Verified Commands
 
@@ -34,11 +37,11 @@ These passed during the last working session:
   - Injects editor state snapshot as a system message in `GetMessagesForLlm`.
   - Enhanced `BASE_SYSTEM_PROMPT` with early state-querying and inventory search rules.
 - `src/ChatUI.as`
-  - Live context/token stats strip.
+  - Redesigned stats strip with visual progress bar for context budget.
+  - Color-coded token categories (Ctx, Rem, In, Out, Total Out, Sum, Hist, Tools, Msgs, Compact).
   - Provider/model/effort settings UI.
 - `src/AgentLoop.as`
-  - Uses the shared history/compaction path.
-  - Passes OpenAI reasoning effort through.
+  - Captures usage token stats from LLM responses and passes to AgentUI.
 - `src/ToolAssembler.as`
   - Includes inventory tools in the assembled tool list.
   - New `GetEditorStateSnapshot()` builds a text snapshot of map, cursor, placement mode, and inventory state.
@@ -46,6 +49,8 @@ These passed during the last working session:
   - Covers defaults, tool list sync, context stats, compaction, and inventory tool presence.
 - `../tm-mcptm/src/McpTM_Tools.as`
   - Implements `GetInventorySummary` and `FindInventory`.
+- `../tm-aiapi/src/AiApi_Net.as`
+  - Now returns `usage` object with `input_tokens`, `output_tokens`, `total_tokens` from API responses.
 
 ## Goal File
 
