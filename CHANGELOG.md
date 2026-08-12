@@ -12,7 +12,8 @@ Versions follow `info.toml` `[meta] version`.
 
 - Hardened agent cancellation, tool polling, provider errors, and busy-message admission.
 - Preserved native Anthropic tool history and OpenAI Responses reasoning state.
-- Added runtime statistics, context compaction, and release validation.
+- Redesigned the in-game chat with richer conversation controls, tool activity, status, and context-pressure presentation.
+- Added agent-driven camera focus, UI capture and analysis utilities, inventory tools, runtime statistics, context compaction, and release validation.
 
 ### Fixed
 
