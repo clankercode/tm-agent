@@ -5,6 +5,17 @@ const int STATE_EXECUTING_TOOLS = 3;
 
 int g_State = STATE_IDLE;
 array<Json::Value@> g_PendingToolCalls;
+uint g_RunGeneration = 0;
+
+class AgentRunRequest {
+    uint generation;
+    string content;
+
+    AgentRunRequest(uint generation, const string &in content) {
+        this.generation = generation;
+        this.content = content;
+    }
+}
 
 void SendMessage(const string &in content) {
     if (g_State != STATE_IDLE) {
@@ -13,7 +24,8 @@ void SendMessage(const string &in content) {
     LlmHistory::AddUserMessage(content);
     g_State = STATE_AWAITING_LLM;
     AgentUI::SetStatus(AgentUI::StatusKind::CallingLLM);
-    startnew(AgentLoopCoroutine, content);
+    uint generation = ++g_RunGeneration;
+    startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(generation, content));
 }
 
 // Minimal provider ping used by the "Test Provider" button in Settings.
@@ -90,7 +102,10 @@ void ProviderTestCoro() {
     AgentUI::g_TestRunning = false;
 }
 
-void AgentLoopCoroutine(const string &in userContent) {
+void AgentLoopCoroutine(ref@ requestRef) {
+    AgentRunRequest@ request = cast<AgentRunRequest>(requestRef);
+    if (request is null || request.generation != g_RunGeneration) return;
+
     Json::Value@ tools = ToolAssembler::GetToolList();
     LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens);
     Json::Value@ messages = LlmHistory::GetMessagesForLlm(tools);
@@ -124,6 +139,18 @@ void AgentLoopCoroutine(const string &in userContent) {
             messages,
             ToolAssembler::GetToolList()
         );
+    }
+
+    // HTTP requests cannot be interrupted, so cancellation invalidates their
+    // generation and discards the eventual response before it can mutate UI,
+    // history, or execute tools in a newer conversation.
+    if (request.generation != g_RunGeneration) return;
+
+    if (resp is null) {
+        AgentUI::SetStatus(AgentUI::StatusKind::Error, "Provider returned no response");
+        AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Provider returned no response.");
+        g_State = STATE_IDLE;
+        return;
     }
 
     {
@@ -244,7 +271,7 @@ void ProcessToolCalls() {
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
     g_State = STATE_AWAITING_LLM;
     AgentUI::IncrementStep();
-    startnew(AgentLoopCoroutine, "");
+    startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(g_RunGeneration, ""));
 }
 
 bool IsToolResultSuccess(Json::Value@ r) {
@@ -256,6 +283,7 @@ bool IsToolResultSuccess(Json::Value@ r) {
 }
 
 void CancelCurrentRun() {
+    g_RunGeneration++;
     g_State = STATE_IDLE;
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
     AgentUI::SetStatus(AgentUI::StatusKind::Cancelled);

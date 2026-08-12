@@ -1443,6 +1443,7 @@ namespace AgentUI {
     }
 
     void ClearMessages() {
+        ::CancelCurrentRun();
         LlmHistory::ClearHistory();
         g_Messages.RemoveRange(0, g_Messages.Length);
         g_CurrentTurn = 0;
