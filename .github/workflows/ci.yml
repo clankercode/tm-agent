@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  static:
+    name: Static checks (no game)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Shell syntax
+        run: bash -n build.sh capture_ui.sh analyze_ui.sh
+      - name: Python syntax
+        run: PYTHONDONTWRITEBYTECODE=1 python -m py_compile capture_ui.py driver.py
+      - name: Release archive inputs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+          TM_PLUGIN_SKIP_LSP_CHECK=1 ./build.sh release
+          VERSION="$(awk -F= '/^version/ { gsub(/[ \"]/, "", $2); print $2; exit }' info.toml)"
+          test -s "tm-agent-${VERSION}.op"
+          7z t "tm-agent-${VERSION}.op"
+          ! 7z x -so "tm-agent-${VERSION}.op" info.toml | grep -Eq '^defines[[:space:]]*='
+          7z l -slt "tm-agent-${VERSION}.op" | grep -Fqx 'Path = README.md'
+          7z l -slt "tm-agent-${VERSION}.op" | grep -Fqx 'Path = LICENSE'
+          7z l -slt "tm-agent-${VERSION}.op" | grep -Fqx 'Path = UNLICENSE'
+          7z l -slt "tm-agent-${VERSION}.op" | grep -Fqx 'Path = CC0-1.0'

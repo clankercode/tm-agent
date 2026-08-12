@@ -78,8 +78,10 @@ stage_folder_plugin() {
         ;;
     esac
   fi
-  if [[ "${TM_PLUGIN_SKIP_LSP_CHECK:-0}" != "1" ]]; then
+  if [[ "${TM_PLUGIN_SKIP_LSP_CHECK:-0}" != "1" ]] && command -v openplanet-lsp >/dev/null 2>&1; then
     openplanet-lsp check --plugins-dir "$plugins_dir" --plugin-files-search-path . "$dest"
+  elif [[ "${TM_PLUGIN_SKIP_LSP_CHECK:-0}" != "1" ]]; then
+    echo "warning: openplanet-lsp not found; skipping static check" >&2
   fi
   echo "Copied $(basename "$root") to $dest"
 }
@@ -129,10 +131,7 @@ else
   version="$(awk -F= '/^version/ { gsub(/[ "]/, "", $2); print $2; exit }' info.toml)"
   out="$plugin_name-$version.op"
   rm -f "$out"
-  package_files=(./src/* ./info.toml)
-  if [[ -f README.md ]]; then
-    package_files+=(./README.md)
-  fi
+  package_files=(./src/* ./info.toml ./README.md ./LICENSE ./UNLICENSE ./CC0-1.0)
   7z a "$out" "${package_files[@]}"
   echo "Built $out"
   echo "Packed info.toml:"
