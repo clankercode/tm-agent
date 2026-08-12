@@ -7,6 +7,12 @@ int g_State = STATE_IDLE;
 array<Json::Value@> g_PendingToolCalls;
 uint g_RunGeneration = 0;
 
+#if UNITTEST
+bool g_TestAsyncPollHarnessEnabled = false;
+bool g_TestAsyncPollSuspended = false;
+bool g_TestAsyncPollResume = false;
+#endif
+
 class AgentRunRequest {
     uint generation;
     string content;
@@ -122,9 +128,9 @@ void AgentLoopCoroutine(ref@ requestRef) {
         if (request !is null && request.generation == g_RunGeneration) {
             string error = getExceptionInfo();
             print("[tm-agent] agent loop exception: " + error);
+            RecordPendingToolFailures("Agent request aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Agent request failed");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Agent request failed unexpectedly.");
-            g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
             g_State = STATE_IDLE;
         }
     }
@@ -135,8 +141,16 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     if (request is null || request.generation != g_RunGeneration) return;
 
     Json::Value@ tools = ToolAssembler::GetToolList();
-    LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens);
-    Json::Value@ messages = LlmHistory::GetMessagesForLlm(tools);
+    string editorState = LlmHistory::BoundEditorStateForBudget(
+        tools, AgentSettings::S_MaxHistoryTokens, ToolAssembler::GetEditorStateSnapshot());
+    if (!LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens, editorState)) {
+        AgentUI::SetStatus(AgentUI::StatusKind::Error, "History exceeds configured token ceiling");
+        AgentUI::AddMessage(AgentUI::MsgType::Assistant,
+            "Error: The current complete turn cannot fit within Max History Tokens. Increase the limit or start a new conversation.");
+        g_State = STATE_IDLE;
+        return;
+    }
+    Json::Value@ messages = LlmHistory::GetMessagesForLlm(tools, editorState);
 
     Provider provider = AgentSettings::S_Provider;
     string apiKey;
@@ -158,7 +172,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     Json::Value@ resp;
     if (provider == Provider::MiniMax) {
         string system;
-        Json::Value@ anthropicMessages = LlmHistory::GetMessagesForAnthropic(tools, system);
+        Json::Value@ anthropicMessages = LlmHistory::GetMessagesForAnthropic(tools, system, editorState);
         @resp = AiApi::Anthropic_Complete(apiKey, model, anthropicMessages, ToolAssembler::GetToolList(), system);
     } else {
         array<string> responsesPrefixes = {"gpt-5"};
@@ -244,12 +258,141 @@ void ProcessToolCalls(uint generation) {
         if (generation == g_RunGeneration) {
             string error = getExceptionInfo();
             print("[tm-agent] tool execution exception: " + error);
+            // The assistant tool-call message is already durable history at
+            // this point. Close every remaining call before returning so both
+            // Responses and Anthropic histories remain structurally valid.
+            RecordPendingToolFailures("Tool execution aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Tool execution failed");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Tool execution failed unexpectedly.");
-            g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
             g_State = STATE_IDLE;
         }
     }
+}
+
+Json::Value@ NewToolError(const string &in message) {
+    Json::Value@ result = Json::Object();
+    result["success"] = false;
+    result["error"] = message;
+    return result;
+}
+
+string SafeToolCallString(Json::Value@ toolCall, const string &in key, const string &in fallback) {
+    if (toolCall is null || toolCall.GetType() != Json::Type::Object) return fallback;
+    return JsonX::Lookup_StringOrDefault(toolCall, key, fallback);
+}
+
+void RecordToolResult(Json::Value@ toolCall, Json::Value@ actualResult) {
+    string name = SafeToolCallString(toolCall, "name", "invalid_tool_call");
+    string toolCallId = SafeToolCallString(toolCall, "id", "invalid_call");
+    string resultJson = Json::Write(actualResult);
+    AgentUI::AddToolResult(name, resultJson);
+    LlmHistory::AddToolResult(toolCallId, name, resultJson);
+}
+
+void RecordPendingToolFailures(const string &in message) {
+    while (g_PendingToolCalls.Length > 0) {
+        Json::Value@ toolCall = g_PendingToolCalls[0];
+        RecordToolResult(toolCall, NewToolError(message));
+        g_PendingToolCalls.RemoveAt(0);
+    }
+}
+
+bool CommitToolResultIfCurrent(uint generation, Json::Value@ toolCall, Json::Value@ actualResult) {
+    if (generation != g_RunGeneration || g_PendingToolCalls.Length == 0) return false;
+    string expectedId = SafeToolCallString(toolCall, "id", "invalid_call");
+    string pendingId = SafeToolCallString(g_PendingToolCalls[0], "id", "invalid_call");
+    if (expectedId != pendingId) return false;
+
+    RecordToolResult(toolCall, actualResult);
+    g_PendingToolCalls.RemoveAt(0);
+    return true;
+}
+
+Json::Value@ ExecutePendingToolCall(Json::Value@ toolCall, uint generation) {
+    if (toolCall is null || toolCall.GetType() != Json::Type::Object) {
+        return NewToolError("Malformed tool call: expected an object");
+    }
+
+    string name = SafeToolCallString(toolCall, "name", "");
+    if (name.Length == 0) {
+        return NewToolError("Malformed tool call: missing tool name");
+    }
+    if (!toolCall.HasKey("input") || toolCall["input"].GetType() != Json::Type::Object) {
+        return NewToolError("Malformed tool call for " + name + ": input must be an object");
+    }
+
+    Json::Value@ input = toolCall["input"];
+    AgentUI::AddToolCall(name, Json::Write(input));
+
+    Json::Value@ result;
+#if UNITTEST
+    if (g_TestAsyncPollHarnessEnabled) {
+        @result = Json::Object();
+        result["request_id"] = "unit_test_async_request";
+    } else {
+#endif
+    try {
+        @result = ToolAssembler::ExecuteToolCall(toolCall);
+    } catch {
+        string error = getExceptionInfo();
+        print("[tm-agent] tool " + name + " threw: " + error);
+        return NewToolError("Tool " + name + " failed unexpectedly");
+    }
+#if UNITTEST
+    }
+#endif
+
+    if (result is null) {
+        return NewToolError("Tool returned no response");
+    }
+    if (!result.HasKey("request_id")) return result;
+
+    string requestId = JsonX::Lookup_StringOrDefault(result, "request_id", "");
+    if (requestId.Length == 0) return NewToolError("Tool returned an invalid request id");
+    Json::Value@ pollReq = Json::Object();
+    pollReq["requestId"] = requestId;
+    uint pollStartedAt = Time::Now;
+
+    while (true) {
+#if UNITTEST
+        if (g_TestAsyncPollHarnessEnabled) {
+            g_TestAsyncPollSuspended = true;
+            while (!g_TestAsyncPollResume) yield();
+        } else {
+#endif
+        yield();
+        sleep(500);
+#if UNITTEST
+        }
+#endif
+        if (generation != g_RunGeneration) return NewToolError("Tool run was cancelled");
+        if (Time::Now - pollStartedAt >= 120000) {
+            return NewToolError("Timed out waiting for tool result");
+        }
+
+        Json::Value@ pollResult;
+        try {
+            @pollResult = McpTM::GetResult(pollReq);
+        } catch {
+            print("[tm-agent] tool polling threw: " + getExceptionInfo());
+            return NewToolError("Tool polling failed unexpectedly");
+        }
+        if (pollResult is null) return NewToolError("Tool polling returned no response");
+        if (!pollResult.HasKey("status")) return pollResult;
+
+        string status = JsonX::Lookup_StringOrDefault(pollResult, "status", "");
+        if (status == "done") {
+            if (pollResult.HasKey("result")) return pollResult["result"];
+            Json::Value@ done = Json::Object();
+            done["result"] = "done";
+            return done;
+        }
+        if (status == "error") {
+            string message = JsonX::Lookup_StringOrDefault(pollResult, "error", "Unknown error");
+            return NewToolError(message);
+        }
+    }
+    return NewToolError("Tool polling ended unexpectedly");
 }
 
 void ProcessToolCallsImpl(uint generation) {
@@ -258,72 +401,19 @@ void ProcessToolCallsImpl(uint generation) {
     }
     g_State = STATE_EXECUTING_TOOLS;
 
-    for (uint i = 0; i < g_PendingToolCalls.Length; i++) {
-        if (generation != g_RunGeneration) return;
-
-        Json::Value@ toolCall = g_PendingToolCalls[i];
-        string name = toolCall["name"];
-        Json::Value@ input = toolCall["input"];
-        string toolCallId = toolCall["id"];
-
-        AgentUI::AddToolCall(name, Json::Write(input));
-        Json::Value@ result = ToolAssembler::ExecuteToolCall(toolCall);
-
-        Json::Value@ actualResult;
-        if (result is null) {
-            @actualResult = Json::Object();
-            actualResult["error"] = "Tool returned no response";
-        } else if (result.HasKey("request_id")) {
-            string requestId = result["request_id"];
-            Json::Value@ pollReq = Json::Object();
-            pollReq["requestId"] = requestId;
-            uint pollStartedAt = Time::Now;
-
-            while (true) {
-                yield();
-                sleep(500);
-                if (generation != g_RunGeneration) return;
-                if (Time::Now - pollStartedAt >= 120000) {
-                    @actualResult = Json::Object();
-                    actualResult["error"] = "Timed out waiting for tool result";
-                    break;
-                }
-                Json::Value@ pollResult = McpTM::GetResult(pollReq);
-                if (pollResult is null) {
-                    @actualResult = Json::Object();
-                    actualResult["error"] = "Tool polling returned no response";
-                    break;
-                } else if (pollResult.HasKey("status")) {
-                    string status = pollResult["status"];
-                    if (status == "done") {
-                        if (pollResult.HasKey("result")) {
-                            @actualResult = pollResult["result"];
-                        } else {
-                            @actualResult = Json::Object();
-                            actualResult["result"] = "done";
-                        }
-                        break;
-                    } else if (status == "error") {
-                        if (pollResult.HasKey("error")) {
-                            @actualResult = Json::Object();
-                            actualResult["error"] = pollResult["error"];
-                        } else {
-                            @actualResult = Json::Object();
-                            actualResult["error"] = "Unknown error";
-                        }
-                        break;
-                    }
-                } else {
-                    @actualResult = pollResult;
-                    break;
-                }
-            }
-        } else {
-            @actualResult = result;
+    while (g_PendingToolCalls.Length > 0) {
+        if (generation != g_RunGeneration) {
+            RecordPendingToolFailures("Tool run was cancelled");
+            return;
         }
 
-        AgentUI::AddToolResult(name, Json::Write(actualResult));
-        LlmHistory::AddToolResult(toolCallId, name, Json::Write(actualResult));
+        Json::Value@ toolCall = g_PendingToolCalls[0];
+        string name = SafeToolCallString(toolCall, "name", "invalid_tool_call");
+        Json::Value@ actualResult = ExecutePendingToolCall(toolCall, generation);
+        // ExecutePendingToolCall can suspend while polling. Cancellation owns
+        // terminal results for the queue, so a stale worker must not write or
+        // remove anything after it resumes.
+        if (!CommitToolResultIfCurrent(generation, toolCall, actualResult)) return;
 
         if (IsToolResultSuccess(actualResult)) {
             if (name == "PlaceBlock") AgentStats::RecordBlockPlaced();
@@ -332,7 +422,6 @@ void ProcessToolCallsImpl(uint generation) {
     }
 
     if (generation != g_RunGeneration) return;
-    g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
     g_State = STATE_AWAITING_LLM;
     AgentUI::IncrementStep();
     startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(generation, ""));
@@ -354,8 +443,11 @@ bool IsToolResultSuccess(Json::Value@ r) {
 
 void CancelCurrentRun() {
     g_RunGeneration++;
+    // Cancellation can race with a persisted assistant tool-call turn. Close
+    // those calls before clearing the queue so future provider requests never
+    // contain dangling call ids.
+    RecordPendingToolFailures("Tool run was cancelled");
     g_State = STATE_IDLE;
-    g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
     AgentUI::SetStatus(AgentUI::StatusKind::Cancelled);
 }
 

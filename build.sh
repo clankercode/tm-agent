@@ -3,9 +3,13 @@ set -euo pipefail
 
 mode="${1:-dev}"
 case "$mode" in
-  dev|release|unittest) ;;
+  dev|release|release-check|unittest) ;;
   *)
-    echo "usage: ./build.sh [dev|release|unittest]" >&2
+    echo "usage: ./build.sh [dev|release|release-check|unittest]" >&2
+    echo "  dev            stage with DEV and reload" >&2
+    echo "  unittest       stage with UNITTEST and reload" >&2
+    echo "  release-check  stage without DEV/UNITTEST and reload" >&2
+    echo "  release        build tm-agent-<version>.op" >&2
     exit 2
     ;;
 esac
@@ -60,6 +64,9 @@ stage_folder_plugin() {
     unittest)
       sed -i 's/^#__DEFINES__/defines = ["UNITTEST"]/' "$dest/info.toml"
       ;;
+    release-check)
+      sed -i '/^defines[[:space:]]*=/d' "$dest/info.toml"
+      ;;
   esac
   if [[ "$dev_suffix" == "1" ]]; then
     case "$build_mode" in
@@ -109,12 +116,15 @@ stage_local_dependencies() {
 
 plugin_name="$(plugin_slug ".")"
 
-if [[ "$mode" == "dev" || "$mode" == "unittest" ]]; then
+if [[ "$mode" == "dev" || "$mode" == "unittest" || "$mode" == "release-check" ]]; then
   if [[ "${TM_PLUGIN_STAGE_LOCAL_DEPS:-1}" != "0" ]]; then
     stage_local_dependencies
   fi
   stage_folder_plugin . "$plugin_name" 1 "$mode"
   remote_load_folder "$plugin_name"
+  if [[ "$mode" == "release-check" ]]; then
+    echo "release-check: staged without DEV/UNITTEST; require a successful Openplanet load before tagging"
+  fi
 else
   version="$(awk -F= '/^version/ { gsub(/[ "]/, "", $2); print $2; exit }' info.toml)"
   out="$plugin_name-$version.op"
@@ -125,4 +135,6 @@ else
   fi
   7z a "$out" "${package_files[@]}"
   echo "Built $out"
+  echo "Packed info.toml:"
+  7z x -so "$out" info.toml 2>/dev/null | cat
 fi

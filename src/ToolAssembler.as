@@ -163,11 +163,14 @@ namespace ToolAssembler {
 
         for (uint i = 0; i < tcs.Length; i++) {
             const Json::Value@ tc = tcs[i];
-            if (tc is null || tc.GetType() != Json::Type::Object) continue;
+            // Preserve every provider call so AgentLoop can persist a matching
+            // error result even when the call shape itself is malformed.
             Json::Value@ item = Json::Object();
-            item["name"] = JsonX::Lookup_StringOrDefault(tc, "name", "");
-            item["id"] = JsonX::Lookup_StringOrDefault(tc, "id", "call_" + i);
-            if (tc.HasKey("input")) {
+            item["name"] = tc !is null && tc.GetType() == Json::Type::Object
+                ? JsonX::Lookup_StringOrDefault(tc, "name", "") : "";
+            item["id"] = tc !is null && tc.GetType() == Json::Type::Object
+                ? JsonX::Lookup_StringOrDefault(tc, "id", "call_" + i) : "call_" + i;
+            if (tc !is null && tc.GetType() == Json::Type::Object && tc.HasKey("input")) {
                 item["input"] = tc["input"];
             } else {
                 item["input"] = Json::Object();
