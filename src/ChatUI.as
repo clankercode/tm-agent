@@ -1198,8 +1198,7 @@ namespace AgentUI {
             trace("Ctrl+Enter pressed");
             string trimmed = g_InputText.Trim();
             if (trimmed.Length > 0) {
-                SendMessage(trimmed);
-                g_InputText = "";
+                if (SendMessage(trimmed)) g_InputText = "";
             }
         }
 
@@ -1210,8 +1209,7 @@ namespace AgentUI {
         PushAccentButtonStyle(accent, fillA, borderA, vec4(0.85, 0.97, 1.00, textA));
         if (UI::Button("Send", vec2(72, inputHeight))) {
             if (g_InputText.Length > 0) {
-                SendMessage(g_InputText);
-                g_InputText = "";
+                if (SendMessage(g_InputText)) g_InputText = "";
             }
         }
         PopAccentButtonStyle();
@@ -1398,7 +1396,9 @@ namespace AgentUI {
         PopTheme();
     }
 
-    void SendMessage(const string &in text) {
+    bool SendMessage(const string &in text) {
+        if (::g_State != STATE_IDLE) return false;
+
         AddMessage(MsgType::User, text);
         g_CurrentTurn++;
         g_StepCount = 1;
@@ -1406,6 +1406,7 @@ namespace AgentUI {
         AgentStats::RecordUserMessage();
 
         startnew(SendMessageCoro, text);
+        return true;
     }
 
     void IncrementStep() {

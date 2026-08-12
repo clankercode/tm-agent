@@ -63,7 +63,11 @@ namespace AgentDriver {
         }
         if (op == "send") {
             if (AgentUI::g_InputText.Length == 0) { resp["ok"] = false; resp["error"] = "input empty"; return resp; }
-            AgentUI::SendMessage(AgentUI::g_InputText);
+            if (!AgentUI::SendMessage(AgentUI::g_InputText)) {
+                resp["ok"] = false;
+                resp["error"] = "agent busy";
+                return resp;
+            }
             AgentUI::g_InputText = "";
             resp["ok"] = true;
             return resp;
