@@ -1405,7 +1405,10 @@ namespace AgentUI {
         g_Status.Set(StatusKind::Running);
         AgentStats::RecordUserMessage();
 
-        startnew(SendMessageCoro, text);
+        // Claim the global run state synchronously. Deferring this call to a
+        // coroutine leaves a frame where a second submission can also pass the
+        // idle check, render in the UI, and then be rejected by AgentLoop.
+        ::SendMessage(text);
         return true;
     }
 
@@ -1414,9 +1417,6 @@ namespace AgentUI {
         AgentStats::RecordStep();
     }
 
-    void SendMessageCoro(const string &in text) {
-        ::SendMessage(text);
-    }
 
     void AddMessage(MsgType t, const string &in content) {
         g_Messages.InsertLast(Message(t, content));
