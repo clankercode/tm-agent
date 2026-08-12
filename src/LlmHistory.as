@@ -12,7 +12,7 @@ namespace LlmHistory {
         + "- After TestMap(), use GetRaceData() to see results\n"
         + "- Be precise with coordinates\n"
         + "- Always query the current editor state before guessing: call GetMapInfo, GetCursor, GetPlacementMode, and GetInventorySummary early in a session\n"
-        + "- When searching for blocks or items, prefer FindInventory with appropriate queries over guessing names";
+        + "- When searching for blocks, items, or macroblocks, prefer SearchInventory with appropriate queries over guessing names";
 
     string TrimForSummary(const string &in text, uint maxLen = 180) {
         if (uint(text.Length) <= maxLen) return text;

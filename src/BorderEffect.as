@@ -54,10 +54,12 @@ namespace BorderEffect {
         // corners: 0=TL, 1=TR, 2=BR, 3=BL
 
         // Use the window drawlist (not foreground) so the border respects
-        // z-order and gets clipped when other windows overlap us.
+        // z-order and gets clipped when other windows overlap us. Expand
+        // the clip rect to the full window bounds — by default the drawlist
+        // is clipped to content area, which causes the top/vertical borders
+        // to be clipped out behind the titlebar and leaves a visible gap.
         auto dl = UI::GetWindowDrawList();
-        // Draw each side as a thin gradient rect. Corners match window corners so
-        // adjacent sides share a color → continuous gradient around the perimeter.
+        dl.PushClipRect(vec4(x0, y0, x1 - x0, y1 - y0));
 
         // Top bar: UL=TL, UR=TR, BL=TL-dim, BR=TR-dim (thin strip, cols near-identical vertically)
         dl.AddRectFilledMultiColor(
@@ -79,6 +81,8 @@ namespace BorderEffect {
             vec4(x1 - t, y0, t, winSize.y),
             corners[1], corners[1], corners[2], corners[2]
         );
+
+        dl.PopClipRect();
     }
 
     // Plain solid border — for states where the animated swirl would be
@@ -97,9 +101,11 @@ namespace BorderEffect {
         float t = Math::Max(1.0, Math::Floor(thickness));
 
         auto dl = UI::GetWindowDrawList();
+        dl.PushClipRect(vec4(x0, y0, x1 - x0, y1 - y0));
         dl.AddRectFilled(vec4(x0, y0, winSize.x, t), color);
         dl.AddRectFilled(vec4(x0, y1 - t, winSize.x, t), color);
         dl.AddRectFilled(vec4(x0, y0, t, winSize.y), color);
         dl.AddRectFilled(vec4(x1 - t, y0, t, winSize.y), color);
+        dl.PopClipRect();
     }
 }

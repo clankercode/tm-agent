@@ -4,13 +4,13 @@ enum Provider {
 }
 
 namespace AgentSettings {
-    [Setting category="API" name="MiniMax"]
+    [Setting category="API" name="MiniMax" password]
     string S_MiniMaxApiKey = "";
 
     [Setting category="API" name="MiniMax Model"]
     string S_MiniMaxModel = "MiniMax-M2.7";
 
-    [Setting category="API" name="OpenAI Key"]
+    [Setting category="API" name="OpenAI Key" password]
     string S_OpenAIApiKey = "";
 
     [Setting category="API" name="OpenAI Model"]

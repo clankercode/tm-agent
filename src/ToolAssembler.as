@@ -5,7 +5,7 @@ import Json::Value@ GetMapInfo(Json::Value@ input) from "McpTM";
 import Json::Value@ GetBlocks(Json::Value@ input) from "McpTM";
 import Json::Value@ GetItems(Json::Value@ input) from "McpTM";
 import Json::Value@ GetInventorySummary(Json::Value@ input) from "McpTM";
-import Json::Value@ FindInventory(Json::Value@ input) from "McpTM";
+import Json::Value@ SearchInventory(Json::Value@ input) from "McpTM";
 import Json::Value@ GetBlockAt(Json::Value@ input) from "McpTM";
 import Json::Value@ GetPickedBlock(Json::Value@ input) from "McpTM";
 import Json::Value@ GetPlacementMode(Json::Value@ input) from "McpTM";
@@ -61,9 +61,9 @@ namespace ToolAssembler {
             '{"type": "object", "properties": {}}'
         );
 
-        AddTool(tools, "FindInventory",
-            "Search the inventory tree by query. Inputs: query (optional), type (all/directory/article), scope (all/currentDirectory), limit (optional).",
-            '{"type": "object", "properties": {"query": {"type": "string"}, "type": {"type": "string", "enum": ["all", "directory", "article"]}, "scope": {"type": "string", "enum": ["all", "currentDirectory", "current"]}, "limit": {"type": "integer"}}, "required": []}'
+        AddTool(tools, "SearchInventory",
+            "Search the E++ inventory cache for blocks, items, and macroblocks by name substring. Inputs: query (optional, case-insensitive substring), type (all/block/item/macroblock), limit (optional, default 25, max 200).",
+            '{"type": "object", "properties": {"query": {"type": "string"}, "type": {"type": "string", "enum": ["all", "block", "item", "macroblock"]}, "limit": {"type": "integer"}}, "required": []}'
         );
         
         AddTool(tools, "GetBlockAt",
@@ -152,43 +152,28 @@ namespace ToolAssembler {
         tools.Add(tool);
     }
 
+    // ai-api normalizes both Anthropic and OpenAI responses into a flat shape:
+    //   { text, tool_calls: [{id, name, input}], usage }
+    // where `input` is an already-parsed JSON object. Read that directly.
     array<Json::Value@> ParseToolCalls(const Json::Value &in response) {
         array<Json::Value@> toolCalls;
-        
-        if (response.HasKey("content")) {
-            auto content = response["content"];
-            if (content.GetType() == Json::Type::Array) {
-                for (uint i = 0; i < content.Length; i++) {
-                    const Json::Value@ block = content[i];
-                    if (block !is null && block.HasKey("type") && string(block["type"]) == "tool_use") {
-                        Json::Value tc = Json::Object();
-                        tc["name"] = string(block["name"]);
-                        tc["input"] = Json::Parse(string(block["input"]));
-                        tc["id"] = block.HasKey("id") ? string(block["id"]) : "call_" + i;
-                        toolCalls.InsertLast(tc);
-                    }
-                }
+        if (!response.HasKey("tool_calls")) return toolCalls;
+        const Json::Value@ tcs = response["tool_calls"];
+        if (tcs is null || tcs.GetType() != Json::Type::Array) return toolCalls;
+
+        for (uint i = 0; i < tcs.Length; i++) {
+            const Json::Value@ tc = tcs[i];
+            if (tc is null || tc.GetType() != Json::Type::Object) continue;
+            Json::Value item = Json::Object();
+            item["name"] = JsonX::Lookup_StringOrDefault(tc, "name", "");
+            item["id"] = JsonX::Lookup_StringOrDefault(tc, "id", "call_" + i);
+            if (tc.HasKey("input")) {
+                item["input"] = tc["input"];
+            } else {
+                item["input"] = Json::Object();
             }
+            toolCalls.InsertLast(item);
         }
-        
-        else if (response.HasKey("choices")) {
-            auto choices = response["choices"];
-            if (choices.GetType() == Json::Type::Array && choices.Length > 0) {
-                const Json::Value@ msg = choices[0]["message"];
-                if (msg.HasKey("tool_calls")) {
-                    const Json::Value@ tcs = msg["tool_calls"];
-                    for (uint i = 0; i < tcs.Length; i++) {
-                        const Json::Value@ tc = tcs[i];
-                        Json::Value item = Json::Object();
-                        item["name"] = string(tc["function"]["name"]);
-                        item["input"] = Json::Parse(string(tc["function"]["arguments"]));
-                        item["id"] = string(tc["id"]);
-                        toolCalls.InsertLast(item);
-                    }
-                }
-            }
-        }
-        
         return toolCalls;
     }
 
@@ -210,7 +195,7 @@ namespace ToolAssembler {
         else if (name == "GetBlocks") @result = GetBlocks(input);
         else if (name == "GetItems") @result = GetItems(input);
         else if (name == "GetInventorySummary") @result = GetInventorySummary(input);
-        else if (name == "FindInventory") @result = FindInventory(input);
+        else if (name == "SearchInventory") @result = SearchInventory(input);
         else if (name == "GetBlockAt") @result = GetBlockAt(input);
         else if (name == "GetPickedBlock") @result = GetPickedBlock(input);
         else if (name == "GetPlacementMode") @result = GetPlacementMode(input);
@@ -251,9 +236,9 @@ namespace ToolAssembler {
         Json::Value@ mapInfo = GetMapInfo(empty);
         if (mapInfo !is null && mapInfo.HasKey("output")) {
             Json::Value@ mapOut = mapInfo["output"];
-            string mapName = mapOut.HasKey("name") ? string(mapOut["name"]) : "unknown";
-            string nbBlocks = mapOut.HasKey("nbBlocks") ? string(mapOut["nbBlocks"]) : "?";
-            string nbItems = mapOut.HasKey("nbItems") ? string(mapOut["nbItems"]) : "?";
+            string mapName = JsonX::Lookup_StringOrDefault(mapOut, "name", "unknown");
+            string nbBlocks = JsonX::Lookup_StringOrDefault(mapOut, "nbBlocks", "?");
+            string nbItems = JsonX::Lookup_StringOrDefault(mapOut, "nbItems", "?");
             state += "- Map: " + mapName + " (" + nbBlocks + " blocks, " + nbItems + " items)\n";
         }
 
@@ -261,48 +246,35 @@ namespace ToolAssembler {
         if (cursor !is null && cursor.HasKey("output")) {
             Json::Value@ curOut = cursor["output"];
             string coord = curOut.HasKey("coord") ? Json::Write(curOut["coord"]) : "[?]";
-            string dir = curOut.HasKey("dir") ? string(curOut["dir"]) : "?";
-            string pickedBlock = "!";
-            string pickedItem = "!";
-            if (curOut.HasKey("pickedBlock") && curOut["pickedBlock"].GetType() != Json::Type::Null) {
-                pickedBlock = string(curOut["pickedBlock"]);
-            }
-            if (curOut.HasKey("pickedItem") && curOut["pickedItem"].GetType() != Json::Type::Null) {
-                pickedItem = string(curOut["pickedItem"]);
-            }
+            string dir = JsonX::Lookup_StringOrDefault(curOut, "dir", "?");
+            string pickedBlock = JsonX::Lookup_StringOrDefault(curOut, "pickedBlock", "!");
+            string pickedItem = JsonX::Lookup_StringOrDefault(curOut, "pickedItem", "!");
             state += "- Cursor: " + coord + " dir=" + dir + " pickedBlock=" + pickedBlock + " pickedItem=" + pickedItem + "\n";
         }
 
         Json::Value@ placement = GetPlacementMode(empty);
         if (placement !is null && placement.HasKey("output")) {
             Json::Value@ placeOut = placement["output"];
-            if (placeOut.HasKey("mode")) {
-                state += "- Placement mode: " + string(placeOut["mode"]) + "\n";
+            string mode = JsonX::Lookup_StringOrDefault(placeOut, "mode", "");
+            if (mode.Length > 0) {
+                state += "- Placement mode: " + mode + "\n";
             }
         }
 
         Json::Value@ inv = GetInventorySummary(empty);
         if (inv !is null && inv.HasKey("output")) {
             Json::Value@ invOut = inv["output"];
-            string invStatus = "unknown";
-            string currentDir = "";
+            string invStatus = JsonX::Lookup_StringOrDefault(invOut, "loadingStatusShort", "unknown");
+            string currentDir = JsonX::Lookup_StringOrDefault(invOut, "currentDirectoryPath", "");
             string selectedNode = "";
-            if (invOut.HasKey("loadingStatusShort")) {
-                invStatus = string(invOut["loadingStatusShort"]);
-            }
-            if (invOut.HasKey("currentDirectoryPath")) {
-                currentDir = string(invOut["currentDirectoryPath"]);
-            }
-            if (invOut.HasKey("currentSelectedNode") && invOut["currentSelectedNode"].GetType() != Json::Type::Null) {
-                Json::Value@ selNode = invOut["currentSelectedNode"];
-                if (selNode.HasKey("path")) {
-                    selectedNode = string(selNode["path"]);
-                }
+            if (invOut.HasKey("currentSelectedNode") && invOut["currentSelectedNode"].GetType() == Json::Type::Object) {
+                selectedNode = JsonX::Lookup_StringOrDefault(invOut["currentSelectedNode"], "path", "");
             }
             state += "- Inventory: " + invStatus;
             if (currentDir.Length > 0) state += " dir=" + currentDir;
             if (selectedNode.Length > 0) state += " selected=" + selectedNode;
             state += "\n";
+
         }
 
         return state.Trim();

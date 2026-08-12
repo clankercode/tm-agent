@@ -41,7 +41,7 @@ namespace AgentDriver {
         if (op == "get_state") {
             resp["ok"] = true;
             resp["input"] = AgentUI::g_InputText;
-            resp["status"] = AgentUI::g_Status;
+            resp["status"] = AgentUI::g_Status.Wire;
             resp["turn"] = AgentUI::g_CurrentTurn;
             resp["step"] = AgentUI::g_StepCount;
             resp["showSettings"] = AgentUI::g_ShowSettings;
@@ -165,17 +165,88 @@ namespace AgentDriver {
         }
         if (op == "set_status") {
             if (!req.HasKey("status")) { resp["ok"] = false; resp["error"] = "status required"; return resp; }
-            AgentUI::g_Status = string(req["status"]);
+            string wire = string(req["status"]);
+            if (!AgentUI::g_Status.FromWire(wire)) {
+                resp["ok"] = false;
+                resp["error"] = "unknown status: " + wire;
+                return resp;
+            }
             resp["ok"] = true;
             return resp;
         }
         if (op == "seed_demo") {
             AgentUI::ClearMessages();
             AgentUI::AddMessage(AgentUI::MsgType::User, "What blocks are on the current map?");
+            AgentUI::AddToolCall("GetMapBlocks", "{\"detail\":\"summary\"}");
+            AgentUI::AddToolResult("GetMapBlocks", "{\"total\":247,\"top\":[{\"name\":\"RoadTechStraight\",\"count\":84},{\"name\":\"RoadDirtStraight\",\"count\":36},{\"name\":\"RoadBumpStraight\",\"count\":22}]}");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "The map has 247 blocks total. Most common:\n\n- RoadTechStraight x84\n- RoadDirtStraight x36\n- RoadBumpStraight x22\n\nWant me to list a specific type or region?");
             AgentUI::AddMessage(AgentUI::MsgType::User, "Place a start block at the cursor.");
+            AgentUI::AddToolCall("PlaceBlock", "{\"block\":\"RoadTechStart\",\"pos\":[24,12,16],\"rot\":\"North\"}");
+            AgentUI::AddToolResult("PlaceBlock", "{\"ok\":true,\"placedAt\":[24,12,16]}");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Done. Placed RoadTechStart at (24, 12, 16) facing North.");
             resp["ok"] = true;
+            return resp;
+        }
+        if (op == "dump_chat") {
+            Json::Value arr = Json::Array();
+            for (uint i = 0; i < AgentUI::g_Messages.Length; i++) {
+                AgentUI::Message@ m = AgentUI::g_Messages[i];
+                Json::Value entry = Json::Object();
+                string role = "user";
+                if (m.type == AgentUI::MsgType::User) role = "user";
+                else if (m.type == AgentUI::MsgType::Assistant) role = "assistant";
+                else if (m.type == AgentUI::MsgType::ToolCall) role = "tool_call";
+                else if (m.type == AgentUI::MsgType::ToolResult) role = "tool_result";
+                else if (m.type == AgentUI::MsgType::System) role = "system";
+                entry["role"] = role;
+                entry["content"] = m.content;
+                if (m.toolName.Length > 0) entry["tool"] = m.toolName;
+                arr.Add(entry);
+            }
+            resp["ok"] = true;
+            resp["chat"] = arr;
+            return resp;
+        }
+        if (op == "load_chat") {
+            if (!req.HasKey("chat")) { resp["ok"] = false; resp["error"] = "chat required"; return resp; }
+            Json::Value@ arr = req["chat"];
+            if (arr is null || arr.GetType() != Json::Type::Array) { resp["ok"] = false; resp["error"] = "chat must be array"; return resp; }
+            AgentUI::ClearMessages();
+            for (uint i = 0; i < arr.Length; i++) {
+                Json::Value@ e = arr[i];
+                if (e is null || !e.HasKey("role")) continue;
+                string role = string(e["role"]);
+                string content = e.HasKey("content") ? string(e["content"]) : "";
+                string toolName = e.HasKey("tool") ? string(e["tool"]) : "";
+                if (role == "tool_call") AgentUI::AddToolCall(toolName, content);
+                else if (role == "tool_result") AgentUI::AddToolResult(toolName, content);
+                else if (role == "assistant" || role == "agent") AgentUI::AddMessage(AgentUI::MsgType::Assistant, content);
+                else if (role == "system") AgentUI::AddMessage(AgentUI::MsgType::System, content);
+                else AgentUI::AddMessage(AgentUI::MsgType::User, content);
+            }
+            resp["ok"] = true;
+            return resp;
+        }
+        if (op == "expand_msg") {
+            if (!req.HasKey("index")) { resp["ok"] = false; resp["error"] = "index required"; return resp; }
+            int ix = int(req["index"]);
+            bool value = req.HasKey("value") ? bool(req["value"]) : true;
+            if (ix < 0 || uint(ix) >= AgentUI::g_Messages.Length) {
+                resp["ok"] = false; resp["error"] = "index out of range"; return resp;
+            }
+            AgentUI::g_Messages[uint(ix)].expanded = value;
+            AgentUI::g_Messages[uint(ix)].InvalidateLayout();
+            resp["ok"] = true;
+            return resp;
+        }
+        if (op == "demo_mode") {
+            if (req.HasKey("value")) {
+                AgentUI::g_DemoMode = bool(req["value"]);
+            } else {
+                AgentUI::g_DemoMode = !AgentUI::g_DemoMode;
+            }
+            resp["ok"] = true;
+            resp["demoMode"] = AgentUI::g_DemoMode;
             return resp;
         }
 

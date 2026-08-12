@@ -12,7 +12,7 @@ void SendMessage(const string &in content) {
     }
     LlmHistory::AddUserMessage(content);
     g_State = STATE_AWAITING_LLM;
-    AgentUI::SetStatus("Calling LLM...");
+    AgentUI::SetStatus(AgentUI::StatusKind::CallingLLM);
     startnew(AgentLoopCoroutine, content);
 }
 
@@ -66,7 +66,15 @@ void ProviderTestCoro() {
         AgentUI::g_TestResult = "No response";
         AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
     } else if (resp.HasKey("error") && resp["error"].GetType() != Json::Type::Null) {
-        string err = string(resp["error"]);
+        Json::Value@ errNode = resp["error"];
+        string err;
+        if (errNode.GetType() == Json::Type::String) {
+            err = string(errNode);
+        } else if (errNode.GetType() == Json::Type::Object && errNode.HasKey("message")) {
+            err = string(errNode["message"]);
+        } else {
+            err = Json::Write(errNode);
+        }
         print("[tm-agent] test: error=" + err);
         string shown = err;
         if (shown.Length > 48) shown = shown.SubStr(0, 45) + "…";
@@ -98,7 +106,7 @@ void AgentLoopCoroutine(const string &in userContent) {
         apiKey = AgentSettings::S_OpenAIApiKey;
         model = AgentSettings::S_OpenAIModel;
     } else {
-        AgentUI::SetStatus("Error: No valid API key configured");
+        AgentUI::SetStatus(AgentUI::StatusKind::Error, "No valid API key configured");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: No valid API key configured. Please check your settings.");
         g_State = STATE_IDLE;
         return;
@@ -118,9 +126,23 @@ void AgentLoopCoroutine(const string &in userContent) {
         );
     }
 
+    {
+        string respDump = Json::Write(resp);
+        if (respDump.Length > 1200) respDump = respDump.SubStr(0, 1200) + "…";
+        print("[tm-agent] LLM resp: " + respDump);
+    }
+
     if (resp.HasKey("error") && resp["error"].GetType() != Json::Type::Null) {
-        string errorMsg = string(resp["error"]);
-        AgentUI::SetStatus("Error: " + errorMsg);
+        Json::Value@ errNode = resp["error"];
+        string errorMsg;
+        if (errNode.GetType() == Json::Type::String) {
+            errorMsg = string(errNode);
+        } else if (errNode.GetType() == Json::Type::Object && errNode.HasKey("message")) {
+            errorMsg = string(errNode["message"]);
+        } else {
+            errorMsg = Json::Write(errNode);
+        }
+        AgentUI::SetStatus(AgentUI::StatusKind::Error, errorMsg);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: " + errorMsg);
         g_State = STATE_IDLE;
         return;
@@ -152,7 +174,7 @@ void AgentLoopCoroutine(const string &in userContent) {
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
         g_State = STATE_IDLE;
-        AgentUI::SetStatus("Idle");
+        AgentUI::SetStatus(AgentUI::StatusKind::Idle);
     }
 }
 
@@ -185,33 +207,38 @@ void ProcessToolCalls() {
                     string status = pollResult["status"];
                     if (status == "done") {
                         if (pollResult.HasKey("result")) {
-                            actualResult = pollResult["result"];
+                            @actualResult = pollResult["result"];
                         } else {
-                            actualResult = Json::Object();
+                            @actualResult = Json::Object();
                             actualResult["result"] = "done";
                         }
                         break;
                     } else if (status == "error") {
                         if (pollResult.HasKey("error")) {
-                            actualResult = Json::Object();
+                            @actualResult = Json::Object();
                             actualResult["error"] = pollResult["error"];
                         } else {
-                            actualResult = Json::Object();
+                            @actualResult = Json::Object();
                             actualResult["error"] = "Unknown error";
                         }
                         break;
                     }
                 } else {
-                    actualResult = pollResult;
+                    @actualResult = pollResult;
                     break;
                 }
             }
         } else {
-            actualResult = result;
+            @actualResult = result;
         }
 
         AgentUI::AddToolResult(name, Json::Write(actualResult));
         LlmHistory::AddToolResult(toolCallId, name, Json::Write(actualResult));
+
+        if (IsToolResultSuccess(actualResult)) {
+            if (name == "PlaceBlock") AgentStats::RecordBlockPlaced();
+            else if (name == "RemoveBlock") AgentStats::RecordBlockRemoved();
+        }
     }
 
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
@@ -220,10 +247,18 @@ void ProcessToolCalls() {
     startnew(AgentLoopCoroutine, "");
 }
 
+bool IsToolResultSuccess(Json::Value@ r) {
+    if (r is null || r.GetType() != Json::Type::Object) return false;
+    if (r.HasKey("error")) return false;
+    if (r.HasKey("success") && !bool(r["success"])) return false;
+    if (r.HasKey("ok") && !bool(r["ok"])) return false;
+    return true;
+}
+
 void CancelCurrentRun() {
     g_State = STATE_IDLE;
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
-    AgentUI::SetStatus("Cancelled");
+    AgentUI::SetStatus(AgentUI::StatusKind::Cancelled);
 }
 
 string GetStateString() {

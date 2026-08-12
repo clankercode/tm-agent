@@ -69,7 +69,7 @@ Still open:
 - `src/UnitTests.as`
   - Covers defaults, tool list sync, context stats, compaction, and inventory tool presence
 - `../tm-mcptm/src/McpTM_Tools.as`
-  - Implements `GetInventorySummary` and `FindInventory`
+  - Implements `GetInventorySummary` (inventory tree) and `SearchInventory` (E++ cache, blocks/items/macroblocks by name)
 - `../tm-aiapi/src/AiApi_Net.as`
   - Returns `usage` object with `input_tokens`, `output_tokens`, `total_tokens` from API responses
 

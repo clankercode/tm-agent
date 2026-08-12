@@ -49,10 +49,15 @@ def main() -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    # Raise TM so no other OS window is sitting on top of our capture.
-    subprocess.run(["xdotool", "windowactivate", "--sync", wid], check=False)
+    # `import -window <wid>` captures the X window by id regardless of
+    # whether it's focused, so we don't windowactivate — that call fires
+    # a focus-change bell on some desktops every time we capture.
+    # If TM ends up occluded by another window, focus it manually before
+    # running this script.
 
-    subprocess.run(["import", "-window", wid, str(OUT_FULL)], check=True)
+    # `-silent` suppresses ImageMagick's built-in capture bell (X BEL) —
+    # without it, every screenshot chimes on the desktop.
+    subprocess.run(["import", "-silent", "-window", wid, str(OUT_FULL)], check=True)
 
     try:
         resp = send({"op": "get_windows"})

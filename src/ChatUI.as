@@ -2,6 +2,10 @@ namespace AgentUI {
     bool g_SettingsExpanded = false;
     bool g_ShowSettings = false;
     bool g_PendingScrollBottom = false;
+    // DEV-ONLY: when true, Render() draws the chat UI even without the
+    // track editor open. Used for iterating on chat visuals from the
+    // driver without needing a live map. Revert to false before ship.
+    bool g_DemoMode = false;
     float g_WindowWidth = 440;
     float g_WindowHeight = 620;
     vec2 g_WindowPos = vec2(120, 120);
@@ -13,7 +17,63 @@ namespace AgentUI {
     string g_InputText = "";
     int g_CurrentTurn = 0;
     int g_StepCount = 0;
-    string g_Status = "Idle";
+    // Status state — enum + optional description, only mutated atomically via
+    // `Status.Set(kind, desc)`. A string "Error: foo" can't get passed around
+    // and mis-parsed anymore; callers pass StatusKind::Error + "foo" explicitly.
+    enum StatusKind { Idle, Running, CallingLLM, Cancelled, Error }
+
+    class Status {
+        private StatusKind m_kind = StatusKind::Idle;
+        private string m_desc = "";
+
+        void Set(StatusKind k, const string &in desc = "") {
+            m_kind = k;
+            m_desc = desc;
+        }
+
+        StatusKind get_Kind() const property { return m_kind; }
+        string get_Description() const property { return m_desc; }
+
+        bool get_InFlight() const property {
+            return m_kind == StatusKind::Running || m_kind == StatusKind::CallingLLM;
+        }
+
+        string get_Label() const property {
+            if (m_kind == StatusKind::Idle) return "IDLE";
+            if (m_kind == StatusKind::Running) return "RUNNING";
+            if (m_kind == StatusKind::CallingLLM) return "CALLING LLM";
+            if (m_kind == StatusKind::Cancelled) return "CANCELLED";
+            if (m_kind == StatusKind::Error) return m_desc.Length > 0 ? m_desc.ToUpper() : "ERROR";
+            return "";
+        }
+
+        // Wire-format string used by the file-IPC driver (and human logs).
+        // Must round-trip via FromWire to preserve state.
+        string get_Wire() const property {
+            if (m_kind == StatusKind::Idle) return "Idle";
+            if (m_kind == StatusKind::Running) return "Running";
+            if (m_kind == StatusKind::CallingLLM) return "Calling LLM...";
+            if (m_kind == StatusKind::Cancelled) return "Cancelled";
+            if (m_kind == StatusKind::Error) return "Error: " + m_desc;
+            return "";
+        }
+
+        bool FromWire(const string &in s) {
+            if (s == "Idle") { Set(StatusKind::Idle); return true; }
+            if (s == "Running") { Set(StatusKind::Running); return true; }
+            if (s == "Calling LLM..." || s == "Calling LLM") { Set(StatusKind::CallingLLM); return true; }
+            if (s == "Cancelled") { Set(StatusKind::Cancelled); return true; }
+            if (s.StartsWith("Error:")) {
+                string body = s.SubStr(6);
+                while (body.Length > 0 && body.SubStr(0, 1) == " ") body = body.SubStr(1);
+                Set(StatusKind::Error, body);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    Status g_Status;
 
     int g_LastInputTokens = 0;
     int g_LastOutputTokens = 0;
@@ -34,10 +94,33 @@ namespace AgentUI {
         string toolResult;
         bool expanded;
 
+        // Layout cache — filled on first draw, invalidated when width or
+        // expanded state changes. Used by the virtual-scroll cull path.
+        float cachedHeight;
+        float cachedForWidth;
+        bool cachedExpanded;
+
+        // Formatting caches — avoid re-parsing/truncating per frame.
+        string cachedPretty;       // prettified JSON for expanded body
+        bool prettyComputed;
+        string cachedPeek;         // truncated single-line preview
+        float peekForWidth;        // availW at which cachedPeek was truncated
+
         Message(MsgType t, const string &in c) {
             type = t;
             content = c;
             expanded = false;
+            cachedHeight = 0;
+            cachedForWidth = 0;
+            cachedExpanded = false;
+            prettyComputed = false;
+            peekForWidth = -1;
+        }
+
+        void InvalidateLayout() {
+            cachedHeight = 0;
+            cachedForWidth = 0;
+            peekForWidth = -1;
         }
     }
 
@@ -79,10 +162,12 @@ namespace AgentUI {
     void DrawProgressBar(float fillRatio) {
         vec4 fillColor = fillRatio > 0.85 ? vec4(0.96, 0.32, 0.30, 1.0) : fillRatio > 0.7 ? vec4(0.98, 0.70, 0.22, 1.0) : vec4(0.00, 0.82, 0.95, 1.0);
 
+        // Track is visibly lighter than the child bg (0.035, 0.042, 0.055)
+        // so the "capacity" strip reads even when fill is near-empty.
         UI::PushStyleColor(UI::Col::PlotHistogram, fillColor);
-        UI::PushStyleColor(UI::Col::FrameBg, vec4(0.11, 0.12, 0.14, 1.0));
-        UI::PushStyleVar(UI::StyleVar::FrameRounding, 3);
-        UI::ProgressBar(fillRatio, vec2(-1, 6), "");
+        UI::PushStyleColor(UI::Col::FrameBg, vec4(0.16, 0.18, 0.22, 1.0));
+        UI::PushStyleVar(UI::StyleVar::FrameRounding, 4);
+        UI::ProgressBar(fillRatio, vec2(-1, 8), "");
         UI::PopStyleVar();
         UI::PopStyleColor(2);
     }
@@ -103,11 +188,10 @@ namespace AgentUI {
 
         UI::Dummy(vec2(0, 4));
 
-        int pct = int(fillRatio * 100.0 + 0.5);
         vec4 remColor = remaining < 20000 ? vec4(0.96, 0.32, 0.30, 1.0) : vec4(0.88, 0.90, 0.93, 1.0);
         array<string> topLabels = {"CTX", "REM", "MSGS"};
         array<string> topValues = {
-            FormatTokenCount(usedTokens) + " / " + FormatTokenCount(maxTokens) + " (" + pct + "%)",
+            FormatTokenCount(usedTokens) + " / " + FormatTokenCount(maxTokens),
             FormatTokenCount(remaining),
             "" + int(stats["messageCount"])
         };
@@ -190,9 +274,56 @@ namespace AgentUI {
                 UI::PopStyleColor();
                 UI::Dummy(vec2(0, padY));
             }
+
+            DrawLifetimeStats(labelCol, sepCol);
         }
 
         UI::PopStyleVar(2);
+    }
+
+    void DrawLifetimeStats(const vec4 &in labelCol, const vec4 &in sepCol) {
+        UI::Dummy(vec2(0, 6));
+
+        vec4 headerCol = vec4(0.40, 0.45, 0.52, 1.0);
+        vec4 ruleCol = vec4(0.40, 0.45, 0.52, 0.28);
+        UI::PushStyleColor(UI::Col::Text, headerCol);
+        UI::Text("L I F E T I M E");
+        UI::PopStyleColor();
+        vec4 hRect = UI::GetItemRect();
+        auto dl = UI::GetWindowDrawList();
+        float ruleY = hRect.y + hRect.w * 0.58;
+        float ruleX1 = hRect.x + hRect.z + 10;
+        float ruleX2 = UI::GetWindowPos().x + UI::GetWindowContentRegionWidth() - 4;
+        if (ruleX2 > ruleX1 + 10) dl.AddLine(vec2(ruleX1, ruleY), vec2(ruleX2, ruleY), ruleCol, 1);
+        UI::Dummy(vec2(0, 2));
+
+        array<string> labels = {"In", "Out", "Msgs", "Turns", "Steps", "Placed", "Removed"};
+        array<string> values = {
+            FormatTokenCount(AgentStats::S_TotalInputTokens),
+            FormatTokenCount(AgentStats::S_TotalOutputTokens),
+            "" + AgentStats::S_TotalUserMessages,
+            "" + AgentStats::S_TotalTurns,
+            "" + AgentStats::S_TotalSteps,
+            "" + AgentStats::S_TotalBlocksPlaced,
+            "" + AgentStats::S_TotalBlocksRemoved
+        };
+
+        vec2 winPos = UI::GetWindowPos();
+        float rightEdge = winPos.x + UI::GetWindowSize().x - 16;
+        float sepW = UI::MeasureString("\xC2\xB7").x + 8;
+        for (uint i = 0; i < labels.Length; i++) {
+            float chunkW = UI::MeasureString(labels[i]).x + 4 + UI::MeasureString(values[i]).x;
+            if (i > 0) {
+                vec4 prev = UI::GetItemRect();
+                float prevRight = prev.x + prev.z;
+                if (prevRight + sepW + chunkW < rightEdge) {
+                    UI::SameLine();
+                    DrawInlineSep(sepCol);
+                    UI::SameLine();
+                }
+            }
+            DrawInlineStat(labels[i], values[i], labelCol);
+        }
     }
 
     void DrawStatRow(const string &in label, const string &in value, const vec4 &in color) {
@@ -238,11 +369,12 @@ namespace AgentUI {
     }
 
     bool AccentCollapsingHeader(const string &in label) {
-        UI::PushStyleColor(UI::Col::Header, vec4(0.11, 0.13, 0.16, 1.0));
-        UI::PushStyleColor(UI::Col::HeaderHovered, vec4(0.15, 0.18, 0.22, 1.0));
-        UI::PushStyleColor(UI::Col::HeaderActive, vec4(0.18, 0.22, 0.27, 1.0));
+        UI::PushStyleColor(UI::Col::Header, vec4(0.08, 0.09, 0.11, 1.0));
+        UI::PushStyleColor(UI::Col::HeaderHovered, vec4(0.12, 0.14, 0.17, 1.0));
+        UI::PushStyleColor(UI::Col::HeaderActive, vec4(0.16, 0.19, 0.23, 1.0));
+        UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
         bool open = UI::CollapsingHeader(label);
-        UI::PopStyleColor(3);
+        UI::PopStyleColor(4);
         return open;
     }
 
@@ -265,6 +397,10 @@ namespace AgentUI {
         UI::PushStyleColor(UI::Col::Text, vec4(0.88, 0.90, 0.93, 1.0));
         UI::PushStyleColor(UI::Col::TextDisabled, vec4(0.48, 0.52, 0.58, 1.0));
         UI::PushStyleColor(UI::Col::Border, vec4(0.30, 0.33, 0.38, 0.85));
+        UI::PushStyleColor(UI::Col::ScrollbarBg, vec4(0.05, 0.06, 0.08, 1.0));
+        UI::PushStyleColor(UI::Col::ScrollbarGrab, vec4(0.40, 0.44, 0.50, 0.28));
+        UI::PushStyleColor(UI::Col::ScrollbarGrabHovered, vec4(0.55, 0.60, 0.68, 0.48));
+        UI::PushStyleColor(UI::Col::ScrollbarGrabActive, vec4(0.70, 0.75, 0.82, 0.66));
 
         UI::PushStyleVar(UI::StyleVar::WindowPadding, vec2(12, 10));
         UI::PushStyleVar(UI::StyleVar::FramePadding, vec2(8, 5));
@@ -280,16 +416,14 @@ namespace AgentUI {
 
     void PopTheme() {
         UI::PopStyleVar(7);
-        UI::PopStyleColor(18);
+        UI::PopStyleColor(22);
     }
 
     void Render() {
         if (!AgentSettings::S_ShowWindow) return;
 
-        // TEMP (dev only): Cond::Always pins the window so capture_ui.sh can crop to a known region.
-        // Revert to Cond::FirstUseEver before shipping so users can drag/resize.
-        UI::SetNextWindowSize(int(g_WindowWidth), int(g_WindowHeight), UI::Cond::Always);
-        UI::SetNextWindowPos(int(g_WindowPos.x), int(g_WindowPos.y), UI::Cond::Always);
+        UI::SetNextWindowSize(int(g_WindowWidth), int(g_WindowHeight), UI::Cond::FirstUseEver);
+        UI::SetNextWindowPos(int(g_WindowPos.x), int(g_WindowPos.y), UI::Cond::FirstUseEver);
         UI::SetNextWindowSizeConstraints(340, 360, 1600, 1400);
 
         PushTheme();
@@ -299,7 +433,7 @@ namespace AgentUI {
             auto app = cast<CGameManiaPlanet>(GetApp());
             auto editor = app !is null ? cast<CGameCtnEditorFree>(app.Editor) : null;
 
-            if (editor is null) {
+            if (editor is null && !g_DemoMode) {
                 DrawNotInEditor();
             } else {
                 DrawHeader();
@@ -315,9 +449,7 @@ namespace AgentUI {
             g_WindowHeight = winSize.y;
             g_WindowPos = UI::GetWindowPos();
 
-            // Fancy animated border only inside the editor — the waiting
-            // state gets a plain solid border instead.
-            if (editor !is null) {
+            if (g_Status.InFlight) {
                 BorderEffect::Swirl();
             } else {
                 BorderEffect::Static();
@@ -550,7 +682,7 @@ namespace AgentUI {
         DrawAmberTitleAccent();
 
         float availH = UI::GetContentRegionAvail().y;
-        UI::Dummy(vec2(0, Math::Max(availH * 0.15, 12.0)));
+        UI::Dummy(vec2(0, Math::Max(availH * 0.08, 12.0)));
 
         DrawIconBadge(56, Icons::MapO, badgeFill, badgeStroke, iconColor);
 
@@ -579,11 +711,15 @@ namespace AgentUI {
             vec4(0.88, 0.90, 0.93, 1.0)
         );
 
-        float remaining = UI::GetContentRegionAvail().y;
-        if (remaining > 80) {
-            UI::Dummy(vec2(0, (remaining - 40) * 0.5));
-            DrawCenteredOrnament(120, vec4(0.95, 0.65, 0.15, 0.30));
-            UI::Dummy(vec2(0, (remaining - 40) * 0.5 - 18));
+        // Ornament sits ~18px below the breadcrumb as a content
+        // terminator rather than floating mid-gap — keeps the content
+        // block visually tight. Footer anchors 22px above the bottom.
+        UI::Dummy(vec2(0, 18));
+        DrawCenteredOrnament(120, vec4(0.95, 0.65, 0.15, 0.30));
+
+        float afterOrnament = UI::GetContentRegionAvail().y;
+        if (afterOrnament > 24) {
+            UI::Dummy(vec2(0, afterOrnament - 22));
         }
         DrawBrandFooter();
     }
@@ -618,15 +754,17 @@ namespace AgentUI {
         vec4 runColor = vec4(0.98, 0.70, 0.22, 1.0);
         vec4 errColor = vec4(0.96, 0.32, 0.30, 1.0);
 
-        if (g_Status.StartsWith("Error:")) {
-            DrawStatusPill(g_Status.ToUpper(), errColor);
-        } else if (g_Status == "Idle") {
+        StatusKind kind = g_Status.Kind;
+        if (kind == StatusKind::Error) {
+            string pillLabel = Icons::ExclamationTriangle + "  " + g_Status.Label;
+            DrawStatusPill(pillLabel, errColor);
+        } else if (kind == StatusKind::Idle) {
             DrawStatusPill("IDLE", idleColor);
-        } else if (g_Status == "Running" || g_Status == "Calling LLM...") {
-            DrawStatusPill(g_Status.ToUpper(), runColor);
+        } else if (g_Status.InFlight) {
+            DrawStatusPill(g_Status.Label, runColor);
             UI::SameLine();
             UI::AlignTextToFramePadding();
-            string thinking = g_Status == "Calling LLM..." ? "calling llm" : "thinking";
+            string thinking = kind == StatusKind::CallingLLM ? "calling llm" : "thinking";
             TextEffect::DoubleWave(
                 thinking,
                 -1.0,
@@ -638,7 +776,7 @@ namespace AgentUI {
                 5.0, 7.0, 0.0
             );
         } else {
-            DrawStatusPill(g_Status.ToUpper(), errColor);
+            DrawStatusPill(g_Status.Label, errColor);
         }
 
         UI::SameLine();
@@ -646,8 +784,9 @@ namespace AgentUI {
         UI::PushFont(UI::Font::DefaultMono);
         UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
         string modelText = CurrentProviderLabel() + " / " + CurrentModelLabel();
-        string turnText = "t" + g_CurrentTurn + "\xC2\xB7s" + g_StepCount;
-        string combined = modelText + "   " + turnText;
+        bool showTurn = g_CurrentTurn > 0 || g_StepCount > 0;
+        string turnText = showTurn ? ("t" + g_CurrentTurn + "\xC2\xB7s" + g_StepCount) : "";
+        string combined = showTurn ? (modelText + "   " + turnText) : modelText;
         vec2 combinedSize = UI::MeasureString(combined);
         float rightEdge = UI::GetWindowSize().x - 12;
         float cursorX = UI::GetCursorPos().x;
@@ -661,13 +800,16 @@ namespace AgentUI {
         UI::PopStyleColor();
         UI::PopFont();
 
-        UI::PushStyleColor(UI::Col::Separator, vec4(0.00, 0.82, 0.95, 0.35));
+        UI::Dummy(vec2(0, 3));
         UI::Separator();
-        UI::PopStyleColor();
+        UI::Dummy(vec2(0, 5));
     }
 
     void DrawMessages() {
-        float bottomReserve = 190;
+        // Reserve just enough for input (84 + borders), send button pad,
+        // and the bottom toolbar (~40). Keeps the chat area maximal so
+        // the window bottom edge isn't wasted as dead space.
+        float bottomReserve = 156;
 
         UI::PushStyleColor(UI::Col::ChildBg, vec4(0.035, 0.042, 0.055, 1.0));
         UI::PushStyleVar(UI::StyleVar::ChildRounding, 6);
@@ -679,9 +821,55 @@ namespace AgentUI {
         if (g_Messages.Length == 0) {
             DrawIdlePlaceholder();
         } else {
+            // Virtual-scroll cull. ListClipper wants uniform row height;
+            // our messages have wildly variable heights (markdown wrap,
+            // expanded JSON, compact chips) so we roll our own: cache each
+            // message's measured advance, then on later frames skip the
+            // full draw and emit SetCursorPos to preserve scroll layout.
+            float scrollY = UI::GetScrollY();
+            float viewH = UI::GetWindowSize().y;
+            // One viewport of over-render above/below smooths fast scrolls
+            // and keeps near-edge items ready to receive clicks.
+            float viewTop = scrollY - viewH;
+            float viewBot = scrollY + viewH * 2.0;
+            float availW = UI::GetContentRegionAvail().x;
+
             for (uint i = 0; i < g_Messages.Length; i++) {
                 auto @msg = g_Messages[i];
-                DrawMessage(msg);
+                bool tightTop = i > 0
+                    && msg.type == MsgType::ToolResult
+                    && g_Messages[i-1].type == MsgType::ToolCall
+                    && g_Messages[i-1].toolName == msg.toolName;
+                // Call followed by its paired result: render both with
+                // zero inter-item spacing so they read as one call→result
+                // unit rather than two independent chips separated by air.
+                bool tightBottom = i + 1 < g_Messages.Length
+                    && msg.type == MsgType::ToolCall
+                    && g_Messages[i+1].type == MsgType::ToolResult
+                    && g_Messages[i+1].toolName == msg.toolName;
+
+                float preY = UI::GetCursorPos().y;
+                bool canCull = msg.cachedHeight > 0
+                    && msg.cachedForWidth == availW
+                    && msg.cachedExpanded == msg.expanded;
+                bool offScreen = canCull
+                    && (preY + msg.cachedHeight < viewTop || preY > viewBot);
+
+                if (offScreen) {
+                    // Reproduce the exact cursor advance without invoking
+                    // any layout or drawlist work for this message.
+                    vec2 pos = UI::GetCursorPos();
+                    UI::SetCursorPos(vec2(pos.x, preY + msg.cachedHeight));
+                } else {
+                    if (tightBottom) UI::PushStyleVar(UI::StyleVar::ItemSpacing, vec2(UI::GetStyleVarVec2(UI::StyleVar::ItemSpacing).x, 0));
+                    DrawMessage(msg, tightTop, tightBottom);
+                    if (tightBottom) UI::PopStyleVar();
+
+                    float postY = UI::GetCursorPos().y;
+                    msg.cachedHeight = postY - preY;
+                    msg.cachedForWidth = availW;
+                    msg.cachedExpanded = msg.expanded;
+                }
             }
             if (g_PendingScrollBottom) {
                 UI::SetScrollHereY(1.0f);
@@ -713,18 +901,33 @@ namespace AgentUI {
         UI::PopStyleColor();
         UI::Dummy(vec2(0, 4));
         UI::PushStyleColor(UI::Col::Text, vec4(0.65, 0.70, 0.76, 1.0));
-        UI::TextWrapped("Inspect the map, find blocks or items, and place things at the cursor.");
+        UI::TextWrapped("Inspect the map, find items, and place blocks at the cursor.");
         UI::PopStyleColor();
         UI::Dummy(vec2(0, 12));
 
-        UI::PushStyleColor(UI::Col::Text, vec4(0.40, 0.45, 0.52, 1.0));
-        UI::Text("T R Y");
-        UI::PopStyleColor();
+        // Section label with trailing hairline rule — groups the
+        // examples beneath it visually without heavy chrome.
+        {
+            vec4 labelCol = vec4(0.40, 0.45, 0.52, 1.0);
+            vec4 ruleCol = vec4(0.40, 0.45, 0.52, 0.28);
+            UI::PushStyleColor(UI::Col::Text, labelCol);
+            UI::Text("T R Y");
+            UI::PopStyleColor();
+            vec4 labelRect = UI::GetItemRect();
+            auto dl2 = UI::GetWindowDrawList();
+            float ruleY = labelRect.y + labelRect.w * 0.58;
+            float ruleX1 = labelRect.x + labelRect.z + 10;
+            float ruleX2 = UI::GetWindowPos().x + UI::GetWindowContentRegionWidth() - 4;
+            if (ruleX2 > ruleX1 + 10) {
+                dl2.AddLine(vec2(ruleX1, ruleY), vec2(ruleX2, ruleY), ruleCol, 1);
+            }
+        }
         UI::Dummy(vec2(0, 4));
 
         DrawExampleLine(accent, "What's on the current map?");
         DrawExampleLine(accent, "Place a start block at the cursor.");
-        DrawExampleLine(accent, "Find road blocks with 'dirt' in the name.");
+        DrawExampleLine(accent, "Search the inventory for 'dirt'.");
+        DrawExampleLine(accent, "Extend this into a classic Trackmania 01-style track.");
         UI::Unindent(14);
 
         vec2 cardEnd = UI::GetCursorPos();
@@ -744,28 +947,36 @@ namespace AgentUI {
         UI::PopStyleColor(4);
     }
 
-    void DrawBubble(const string &in label, const vec4 &in accent, const string &in body) {
+    void DrawBubble(const string &in label, const vec4 &in accent, const string &in body, bool markdown = false) {
         float padX = 10;
         float padY = 8;
         float barW = 2;
+        float labelGap = 2;
 
-        UI::Dummy(vec2(0, 4));
         vec2 cur = UI::GetCursorPos();
         float absX = UI::GetWindowPos().x + cur.x;
         float absYStart = UI::GetWindowPos().y + cur.y - UI::GetScrollY();
         float availW = UI::GetContentRegionAvail().x;
         auto dl = UI::GetWindowDrawList();
 
-        UI::Dummy(vec2(0, padY - 4));
+        UI::Dummy(vec2(0, padY));
         UI::Indent(padX + barW);
-        UI::PushTextWrapPos(UI::GetCursorPos().x + availW - padX * 2 - barW);
-        UI::PushStyleColor(UI::Col::Text, accent);
-        UI::PushFont(UI::Font::DefaultBold);
+        float wrapX = UI::GetCursorPos().x + availW - padX * 2 - barW;
+        UI::PushTextWrapPos(wrapX);
+
+        vec4 labelCol = vec4(accent.x, accent.y, accent.z, 0.72);
+        UI::PushStyleColor(UI::Col::Text, labelCol);
         UI::Text(label);
-        UI::PopFont();
         UI::PopStyleColor();
-        UI::Dummy(vec2(0, 2));
-        UI::TextWrapped(body);
+
+        UI::Dummy(vec2(0, labelGap));
+
+        if (markdown) {
+            UI::Markdown(body);
+        } else {
+            UI::TextWrapped(body);
+        }
+
         UI::PopTextWrapPos();
         UI::Unindent(padX + barW);
         UI::Dummy(vec2(0, padY - 4));
@@ -774,75 +985,238 @@ namespace AgentUI {
         float absYEnd = UI::GetWindowPos().y + curEnd.y - UI::GetScrollY();
 
         vec4 bg = vec4(accent.x, accent.y, accent.z, 0.06);
-        dl.AddRectFilled(vec4(absX, absYStart, availW, absYEnd - absYStart - 4), bg, 4);
+        dl.AddRectFilled(vec4(absX, absYStart, availW, absYEnd - absYStart - 4), bg, 2);
         dl.AddRectFilled(vec4(absX, absYStart, barW, absYEnd - absYStart - 4), accent, 1);
     }
 
-    void DrawMessage(Message@ msg) {
+    bool ToolResultLooksSuccessful(const string &in body) {
+        // Detect explicit failure markers; default to success so
+        // results that don't carry a flag still render as ✓.
+        if (body.Contains("\"success\":false")) return false;
+        if (body.Contains("\"ok\":false")) return false;
+        if (body.Contains("\"error\":\"") && !body.Contains("\"error\":\"\"")) return false;
+        return true;
+    }
+
+    void DrawMessage(Message@ msg, bool tightTop = false, bool tightBottom = false) {
         vec4 userAccent = vec4(0.55, 0.75, 1.00, 1.0);
         vec4 agentAccent = vec4(0.00, 0.82, 0.95, 1.0);
+        vec4 toolCallAccent = vec4(0.78, 0.56, 1.00, 1.0);
+        vec4 toolOkAccent = vec4(0.40, 0.82, 0.55, 1.0);
+        vec4 toolErrAccent = vec4(0.96, 0.38, 0.34, 1.0);
 
         if (msg.type == MsgType::User) {
             DrawBubble("YOU", userAccent, msg.content);
         } else if (msg.type == MsgType::Assistant) {
-            DrawBubble("AGENT", agentAccent, msg.content);
+            DrawBubble("AGENT", agentAccent, msg.content, true);
         } else if (msg.type == MsgType::ToolCall) {
-            UI::Indent();
-            if (UI::TreeNode(msg.toolName + "()")) {
-                UI::Text("Input: " + msg.content);
-                UI::TreePop();
-            }
-            UI::Unindent();
+            // "↗ ToolName" reads as "outgoing call" at a glance.
+            string label = Icons::ArrowRight + "  " + msg.toolName;
+            DrawToolChip(msg, label, msg.content, toolCallAccent, false, false, tightBottom);
         } else if (msg.type == MsgType::ToolResult) {
-            UI::Indent();
-            DrawColoredText(vec4(0.40, 0.82, 0.55, 1.0), msg.toolName + " result");
-            UI::TextWrapped(msg.toolResult);
-            UI::Unindent();
-            DrawSpacing();
+            bool success = ToolResultLooksSuccessful(msg.content);
+            vec4 accent = success ? toolOkAccent : toolErrAccent;
+            // Paired result (follows same-tool call): drop the repeated
+            // tool name, use a status glyph so the eye chains call→result.
+            string label;
+            if (tightTop) {
+                label = success ? Icons::Check : Icons::Times;
+            } else {
+                label = (success ? Icons::Check : Icons::Times) + "  " + msg.toolName;
+            }
+            DrawToolChip(msg, label, msg.content, accent, tightTop, tightTop, false);
         } else if (msg.type == MsgType::System) {
             DrawColoredText(vec4(0.50, 0.54, 0.60, 1.0), msg.content);
             DrawSpacing();
         }
     }
 
-    void DrawInput() {
-        vec2 startPos = UI::GetCursorPos();
-        float winW = UI::GetWindowSize().x;
-        float absX = UI::GetWindowPos().x + startPos.x;
-        float absY = UI::GetWindowPos().y + startPos.y - UI::GetScrollY();
+    // Compact chip for tool-call / tool-result rows. Uses UI::Dummy as
+    // the layout hit-area then checks IsItemHovered/IsItemClicked after
+    // — click detection works on any UI element in Openplanet ImGui, so
+    // we don't need InvisibleButton or a styled Button here. Chrome is
+    // drawn entirely via drawlist (accent dot, icon, label, dim peek).
+    void DrawToolChip(Message@ msg, const string &in label, const string &in body, const vec4 &in accent, bool tightTop = false, bool compact = false, bool tightBottom = false) {
+        UI::Dummy(vec2(0, tightTop ? 0 : 2));
+        float availW = UI::GetContentRegionAvail().x;
+        vec2 cur = UI::GetCursorPos();
+        float absX = UI::GetWindowPos().x + cur.x;
+        float absY = UI::GetWindowPos().y + cur.y - UI::GetScrollY();
         auto dl = UI::GetWindowDrawList();
-        dl.AddLine(vec2(absX, absY), vec2(absX + winW - startPos.x * 2, absY), vec4(0.30, 0.33, 0.38, 1.0), 1);
+
+        float padX = 10;
+        float rowH = UI::GetFrameHeight();
+
+        // Labels (function names) and peeks (first line of JSON) are data,
+        // not prose — render in mono so they scan like a code listing.
+        UI::PushFont(UI::Font::DefaultMono);
+
+        // Peek is truncated to available row width — recompute only when
+        // the width changes, not every frame.
+        float peekMaxW = availW - padX * 2 - UI::MeasureString(label).x - 34;
+        if (msg.peekForWidth != availW) {
+            int nl = body.IndexOf("\n");
+            string firstLine = nl >= 0 ? body.SubStr(0, nl) : body;
+            string peekBody = firstLine;
+            int oi = peekBody.IndexOf("\"output\":");
+            if (oi >= 0) {
+                peekBody = peekBody.SubStr(oi + 9);
+                if (peekBody.StartsWith(" ")) peekBody = peekBody.SubStr(1);
+                if (peekBody.StartsWith("{")) peekBody = peekBody.SubStr(1);
+                int siblingCut = peekBody.IndexOf("},\"input\":");
+                if (siblingCut >= 0) peekBody = peekBody.SubStr(0, siblingCut);
+                int successCut = peekBody.IndexOf("},\"success\":");
+                if (successCut >= 0) peekBody = peekBody.SubStr(0, successCut);
+            }
+            msg.cachedPeek = TruncateToWidth(peekBody, peekMaxW);
+            msg.peekForWidth = availW;
+        }
+        string peek = msg.cachedPeek;
+
+        // Dummy reserves the row in the layout; IsItemHovered/Clicked
+        // report native interaction state afterwards.
+        UI::Dummy(vec2(availW, rowH));
+        bool hovered = UI::IsItemHovered();
+        if (hovered && UI::IsMouseClicked(UI::MouseButton::Left)) {
+            msg.expanded = !msg.expanded;
+            msg.InvalidateLayout();
+        }
+
+        float bgA = hovered ? 0.14 : 0.05;
+        vec4 bg = vec4(accent.x, accent.y, accent.z, bgA);
+        dl.AddRectFilled(vec4(absX, absY, availW, rowH), bg, 3);
+        // Left accent bar ties the row into the bubble family.
+        dl.AddRectFilled(vec4(absX, absY, 2, rowH), accent, 1);
+        float midY = absY + rowH * 0.5;
+
+        // The label starts with a status glyph (→ / ✓ / ✗) followed by
+        // whitespace and optional tool name. Split the label so the
+        // glyph renders in accent color while the name stays neutral.
+        int sepIx = label.IndexOf("  ");
+        string glyph = sepIx >= 0 ? label.SubStr(0, sepIx) : label;
+        string labelTail = sepIx >= 0 ? label.SubStr(sepIx + 2) : "";
+        float tx = absX + padX;
+        vec2 gSize = UI::MeasureString(glyph);
+        vec4 glyphCol = vec4(accent.x, accent.y, accent.z, 1.0);
+        dl.AddText(vec2(tx, midY - gSize.y * 0.5), glyphCol, glyph);
+        tx += gSize.x;
+        vec4 labelCol = vec4(0.88, 0.90, 0.93, 1.0);
+        if (labelTail.Length > 0) {
+            tx += 8;
+            vec2 tSize = UI::MeasureString(labelTail);
+            dl.AddText(vec2(tx, midY - tSize.y * 0.5), labelCol, labelTail);
+            tx += tSize.x;
+        }
+        tx += 10;
+
+        // Peek is redundant when the full body is rendered below — only
+        // show the inline preview on collapsed chips.
+        if (!msg.expanded) {
+            vec4 peekCol = vec4(0.55, 0.60, 0.68, 0.90);
+            vec2 pSize = UI::MeasureString(peek);
+            dl.AddText(vec2(tx, midY - pSize.y * 0.5), peekCol, peek);
+        }
+
+        UI::PopFont();
+
+        if (msg.expanded) {
+            // Prettify once per message — Json::Parse+Write per frame was
+            // a measurable chunk of the draw cost on long chats.
+            if (!msg.prettyComputed) {
+                msg.cachedPretty = body;
+                auto parsed = Json::Parse(body);
+                if (parsed !is null && parsed.GetType() != Json::Type::Null) {
+                    msg.cachedPretty = Json::Write(parsed, true);
+                }
+                msg.prettyComputed = true;
+            }
+
+            UI::Indent(padX + 10);
+            UI::PushFont(UI::Font::DefaultMono);
+            UI::PushStyleColor(UI::Col::Text, vec4(0.72, 0.76, 0.82, 1.0));
+            UI::TextWrapped(msg.cachedPretty);
+            UI::PopStyleColor();
+            UI::PopFont();
+            UI::Unindent(padX + 10);
+
+            vec2 expEnd = UI::GetCursorPos();
+            float expEndY = UI::GetWindowPos().y + expEnd.y - UI::GetScrollY();
+            // Continuing accent bar flows from the chip's bar into the body
+            // — no separate tinted panel, so the expanded content reads as
+            // indented text attached to the chip rather than a second card.
+            float barTop = absY + rowH;
+            vec4 barCol = vec4(accent.x, accent.y, accent.z, 0.65);
+            dl.AddRectFilled(vec4(absX, barTop, 2, expEndY - barTop), barCol, 1);
+        }
+
+        UI::Dummy(vec2(0, tightBottom ? 0 : 2));
+    }
+
+    const UI::InputTextFlags _WordWrap = UI::InputTextFlags(1 << 24);
+
+    void DrawInput() {
         UI::Dummy(vec2(0, 6));
 
         float inputHeight = 84;
         float inputWidth = UI::GetWindowContentRegionWidth() - 84;
 
-        g_InputText = UI::InputTextMultiline("##input", g_InputText, vec2(inputWidth, inputHeight));
+        vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
+        bool preActive = g_InputText.Length > 0;
+        UI::PushStyleColor(UI::Col::Border, vec4(accent.x, accent.y, accent.z, preActive ? 0.55 : 0.18));
+        UI::PushStyleVar(UI::StyleVar::FrameBorderSize, 1);
+        g_InputText = UI::InputTextMultiline("##input", g_InputText, vec2(inputWidth, inputHeight), UI::InputTextFlags(UI::InputTextFlags::CtrlEnterForNewLine | _WordWrap));
+        bool focused = UI::IsItemActive() || UI::IsItemFocused();
+        UI::PopStyleVar();
+        UI::PopStyleColor();
+
         bool inputEmpty = g_InputText.Length == 0;
-        if (inputEmpty && !UI::IsItemActive()) {
+        if (inputEmpty && !focused) {
             vec4 inRect = UI::GetItemRect();
             auto dl2 = UI::GetWindowDrawList();
             dl2.AddText(vec2(inRect.x + 10, inRect.y + 8), vec4(0.40, 0.44, 0.50, 1.0), "Ask about the map, place blocks, find items\xE2\x80\xA6");
+        }
+        if (focused) {
+            vec4 inRect = UI::GetItemRect();
+            auto dl3 = UI::GetWindowDrawList();
+            float pulse = BreathPulse(2.5);
+            vec4 glow = vec4(accent.x, accent.y, accent.z, 0.25 + 0.20 * pulse);
+            dl3.AddRect(vec4(inRect.x - 1, inRect.y - 1, inRect.z + 2, inRect.w + 2), glow, 2, 1);
+            // Subtle shortcut hint in bottom-right of the textarea.
+            UI::PushFont(UI::Font::DefaultMono);
+            string hint = "Ctrl + Enter";
+            vec2 hSize = UI::MeasureString(hint);
+            vec4 hintCol = vec4(accent.x, accent.y, accent.z, 0.55);
+            dl3.AddText(vec2(inRect.x + inRect.z - hSize.x - 8, inRect.y + inRect.w - hSize.y - 6), hintCol, hint);
+            UI::PopFont();
+        }
+
+        // Ctrl+Enter submits while the multiline input is focused. Plain
+        // Enter still inserts a newline (the default multiline behaviour).
+        bool ctrlDown = UI::IsKeyDown(UI::Key::LeftCtrl) || UI::IsKeyDown(UI::Key::RightCtrl);
+        bool enterPressed = UI::IsKeyPressed(UI::Key::Enter);
+        if (focused && ctrlDown && enterPressed) {
+            trace("Ctrl+Enter pressed");
+            string trimmed = g_InputText.Trim();
+            if (trimmed.Length > 0) {
+                SendMessage(trimmed);
+                g_InputText = "";
+            }
         }
 
         UI::SameLine();
         float fillA = inputEmpty ? 0.06 : 0.28;
         float borderA = inputEmpty ? 0.25 : 0.70;
         float textA = inputEmpty ? 0.65 : 1.0;
-        UI::PushStyleColor(UI::Col::Button, vec4(0.00, 0.82, 0.95, fillA));
-        UI::PushStyleColor(UI::Col::ButtonHovered, vec4(0.00, 0.82, 0.95, 0.42));
-        UI::PushStyleColor(UI::Col::ButtonActive, vec4(0.00, 0.82, 0.95, 0.60));
-        UI::PushStyleColor(UI::Col::Border, vec4(0.00, 0.82, 0.95, borderA));
-        UI::PushStyleColor(UI::Col::Text, vec4(0.85, 0.97, 1.00, textA));
-        UI::PushStyleVar(UI::StyleVar::FrameBorderSize, 1);
+        PushAccentButtonStyle(accent, fillA, borderA, vec4(0.85, 0.97, 1.00, textA));
         if (UI::Button("Send", vec2(72, inputHeight))) {
             if (g_InputText.Length > 0) {
                 SendMessage(g_InputText);
                 g_InputText = "";
             }
         }
-        UI::PopStyleVar();
-        UI::PopStyleColor(5);
+        PopAccentButtonStyle();
+
+        // UI::Text("[Debug] ctrl: " + ctrlDown + " | focused: " + focused + " | enter: " + enterPressed);
     }
 
     void DrawBottomToolbar() {
@@ -889,28 +1263,47 @@ namespace AgentUI {
         UI::PopStyleColor(5);
     }
 
-    void DrawSectionHeader(const string &in title) {
+    void DrawSectionHeader(const string &in title, const string &in icon = "") {
         vec4 sectionCol = vec4(0.00, 0.82, 0.95, 0.85);
+        vec4 iconCol = vec4(0.00, 0.82, 0.95, 0.55);
         UI::Dummy(vec2(0, 2));
         UI::PushFont(UI::Font::DefaultBold);
+        if (icon.Length > 0) {
+            UI::PushStyleColor(UI::Col::Text, iconCol);
+            UI::Text(icon);
+            UI::PopStyleColor();
+            UI::SameLine(0, 8);
+        }
         UI::PushStyleColor(UI::Col::Text, sectionCol);
         UI::Text(title);
         UI::PopStyleColor();
         UI::PopFont();
+        UI::Dummy(vec2(0, 3));
+    }
 
-        // Custom cyan-tinted separator that belongs with the heading rather
-        // than ImGui's default gray line that reads as "end of group".
-        vec4 lineStart = vec4(0.00, 0.82, 0.95, 0.35);
-        vec4 lineEnd = vec4(0.00, 0.82, 0.95, 0.03);
-        vec2 winPos = UI::GetWindowPos();
-        vec2 winSize = UI::GetWindowSize();
-        float y = winPos.y + UI::GetCursorPos().y - UI::GetScrollY() + 1;
-        auto dl = UI::GetWindowDrawList();
-        dl.AddRectFilledMultiColor(
-            vec4(winPos.x + 8, y, winSize.x - 16, 1),
-            lineStart, lineEnd, lineEnd, lineStart
-        );
-        UI::Dummy(vec2(0, 5));
+    // ---- Reusable UI helpers ----
+
+    // Horizontal rule that fades edge → mid → edge in the given accent.
+    // Used to visually anchor section headings; also as a lighter
+    // alternative to UI::Separator() when a row needs emphasis.
+    // Push style for an accent-tinted button (Send / Close / Test Provider
+    // family). Caller MUST call PopAccentButtonStyle() after the Button.
+    //   fillA / borderA scale accent alpha on the body/border slots.
+    //   textColor is used verbatim — callers pick whatever tone looks right
+    //   against the accent (e.g. cyan-accent buttons use near-white; amber
+    //   accent buttons use bright amber to stay on palette).
+    void PushAccentButtonStyle(const vec4 &in accent, float fillA, float borderA, const vec4 &in textColor, float hoverFillA = 0.42, float activeFillA = 0.60) {
+        UI::PushStyleColor(UI::Col::Button, vec4(accent.x, accent.y, accent.z, fillA));
+        UI::PushStyleColor(UI::Col::ButtonHovered, vec4(accent.x, accent.y, accent.z, hoverFillA));
+        UI::PushStyleColor(UI::Col::ButtonActive, vec4(accent.x, accent.y, accent.z, activeFillA));
+        UI::PushStyleColor(UI::Col::Border, vec4(accent.x, accent.y, accent.z, borderA));
+        UI::PushStyleColor(UI::Col::Text, textColor);
+        UI::PushStyleVar(UI::StyleVar::FrameBorderSize, 1);
+    }
+
+    void PopAccentButtonStyle() {
+        UI::PopStyleVar();
+        UI::PopStyleColor(5);
     }
 
     void RenderSettingsWindow() {
@@ -924,7 +1317,7 @@ namespace AgentUI {
             DrawAmberTitleAccent();
             int keyFlags = UI::InputTextFlags::Password;
 
-            DrawSectionHeader("PROVIDER");
+            DrawSectionHeader("PROVIDER", Icons::Plug);
             string currentProvider = AgentSettings::S_Provider == Provider::MiniMax ? "MiniMax" : "OpenAI";
             if (UI::BeginCombo("Provider", currentProvider)) {
                 if (UI::Selectable("MiniMax", AgentSettings::S_Provider == Provider::MiniMax)) {
@@ -937,11 +1330,11 @@ namespace AgentUI {
             }
 
             if (AgentSettings::S_Provider == Provider::MiniMax) {
-                DrawSectionHeader("MINIMAX");
+                DrawSectionHeader("MINIMAX", Icons::Key);
                 AgentSettings::S_MiniMaxApiKey = UI::InputText("API Key", AgentSettings::S_MiniMaxApiKey, keyFlags);
                 AgentSettings::S_MiniMaxModel = UI::InputText("Model", AgentSettings::S_MiniMaxModel);
             } else {
-                DrawSectionHeader("OPENAI");
+                DrawSectionHeader("OPENAI", Icons::Key);
                 AgentSettings::S_OpenAIApiKey = UI::InputText("API Key", AgentSettings::S_OpenAIApiKey, keyFlags);
                 AgentSettings::S_OpenAIModel = UI::InputText("Model", AgentSettings::S_OpenAIModel);
                 string currentEffort = AgentSettings::S_OpenAIReasoningEffort;
@@ -960,9 +1353,12 @@ namespace AgentUI {
             // key+model combo is actually reachable. Status renders inline.
             UI::Dummy(vec2(0, 2));
             UI::BeginDisabled(g_TestRunning);
+            vec4 amber = vec4(0.95, 0.65, 0.15, 1.0);
+            PushAccentButtonStyle(amber, 0.14, 0.55, vec4(1.00, 0.88, 0.52, 1.0), 0.28, 0.42);
             if (UI::Button(Icons::Bolt + "  Test Provider##providertest")) {
                 StartProviderTest();
             }
+            PopAccentButtonStyle();
             UI::EndDisabled();
             if (g_TestResult.Length > 0) {
                 UI::SameLine(0, 10);
@@ -972,7 +1368,7 @@ namespace AgentUI {
                 UI::PopStyleColor();
             }
 
-            DrawSectionHeader("CONTEXT");
+            DrawSectionHeader("CONTEXT", Icons::Database);
             AgentSettings::S_MaxHistoryTokens = UI::SliderInt(
                 "Max History Tokens", AgentSettings::S_MaxHistoryTokens, 16000, 200000, "%d tok"
             );
@@ -990,9 +1386,12 @@ namespace AgentUI {
             // Right-align the close button so it anchors the window corner.
             float closeW = UI::MeasureString(Icons::Times + "  Close").x + 20;
             UI::SetCursorPosX(UI::GetWindowSize().x - closeW - 12);
+            vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
+            PushAccentButtonStyle(accent, 0.12, 0.50, vec4(0.85, 0.97, 1.00, 1.0), 0.28, 0.42);
             if (UI::Button(Icons::Times + "  Close", vec2(closeW, UI::GetFrameHeight()))) {
                 g_ShowSettings = false;
             }
+            PopAccentButtonStyle();
         }
         UI::End();
         PopTheme();
@@ -1002,13 +1401,15 @@ namespace AgentUI {
         AddMessage(MsgType::User, text);
         g_CurrentTurn++;
         g_StepCount = 1;
-        g_Status = "Running";
+        g_Status.Set(StatusKind::Running);
+        AgentStats::RecordUserMessage();
 
         startnew(SendMessageCoro, text);
     }
 
     void IncrementStep() {
         g_StepCount++;
+        AgentStats::RecordStep();
     }
 
     void SendMessageCoro(const string &in text) {
@@ -1034,8 +1435,10 @@ namespace AgentUI {
         g_PendingScrollBottom = true;
     }
 
-    void SetStatus(const string &in status) {
-        g_Status = status;
+    // Callers pass StatusKind + optional description. The one overload that
+    // takes a free string (wire format) is reserved for the file-IPC driver.
+    void SetStatus(StatusKind kind, const string &in description = "") {
+        g_Status.Set(kind, description);
     }
 
     void ClearMessages() {
@@ -1043,7 +1446,7 @@ namespace AgentUI {
         g_Messages.RemoveRange(0, g_Messages.Length);
         g_CurrentTurn = 0;
         g_StepCount = 0;
-        g_Status = "Idle";
+        g_Status.Set(StatusKind::Idle);
         g_LastInputTokens = 0;
         g_LastOutputTokens = 0;
         g_LastTotalTokens = 0;
@@ -1055,6 +1458,7 @@ namespace AgentUI {
         g_LastOutputTokens = outputTokens;
         g_LastTotalTokens = totalTokens;
         g_RunningOutputTokens += outputTokens;
+        AgentStats::RecordTokens(inputTokens, outputTokens);
     }
 
     void RenderMenu() {

@@ -42,7 +42,7 @@ namespace AgentUnitTests {
         Json::Value@ tools = ToolAssembler::GetToolList();
         string toolJson = Json::Write(tools);
         Assert(toolJson.Contains("GetInventorySummary"), "inventory summary tool should be registered");
-        Assert(toolJson.Contains("FindInventory"), "inventory search tool should be registered");
+        Assert(toolJson.Contains("SearchInventory"), "inventory search tool should be registered");
     }
 
     void Test_ContextStats_GrowWithMessages() {
