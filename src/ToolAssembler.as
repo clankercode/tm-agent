@@ -164,7 +164,7 @@ namespace ToolAssembler {
         for (uint i = 0; i < tcs.Length; i++) {
             const Json::Value@ tc = tcs[i];
             if (tc is null || tc.GetType() != Json::Type::Object) continue;
-            Json::Value item = Json::Object();
+            Json::Value@ item = Json::Object();
             item["name"] = JsonX::Lookup_StringOrDefault(tc, "name", "");
             item["id"] = JsonX::Lookup_StringOrDefault(tc, "id", "call_" + i);
             if (tc.HasKey("input")) {
@@ -172,7 +172,8 @@ namespace ToolAssembler {
             } else {
                 item["input"] = Json::Object();
             }
-            toolCalls.InsertLast(item);
+            toolCalls.Resize(toolCalls.Length + 1);
+            @toolCalls[toolCalls.Length - 1] = item;
         }
         return toolCalls;
     }

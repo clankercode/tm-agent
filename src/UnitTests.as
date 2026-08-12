@@ -72,7 +72,8 @@ namespace AgentUnitTests {
         toolCall["input"] = Json::Object();
         toolCall["id"] = "call_1";
         array<Json::Value@> toolCalls;
-        toolCalls.InsertLast(toolCall);
+        toolCalls.Resize(1);
+        @toolCalls[0] = toolCall;
 
         LlmHistory::AddAssistantToolCalls("calling a tool", toolCalls);
         LlmHistory::AddToolResult("call_1", "GetCursor", '{"success":true,"output":{"coord":[1,2,3]}}');

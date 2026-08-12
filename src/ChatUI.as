@@ -1363,7 +1363,8 @@ namespace AgentUI {
             if (g_TestResult.Length > 0) {
                 UI::SameLine(0, 10);
                 UI::AlignTextToFramePadding();
-                UI::PushStyleColor(UI::Col::Text, g_TestColor);
+                vec4 testColor = g_TestColor;
+                UI::PushStyleColor(UI::Col::Text, testColor);
                 UI::Text(g_TestResult);
                 UI::PopStyleColor();
             }
