@@ -195,7 +195,7 @@ void AgentLoopCoroutine(ref@ requestRef) {
         AgentUI::IncrementStep();
         g_PendingToolCalls = parsedToolCalls;
         g_State = STATE_TOOL_CALLS_PENDING;
-        ProcessToolCalls();
+        ProcessToolCalls(request.generation);
     } else {
         LlmHistory::AddAssistantMessage(text);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
@@ -205,13 +205,15 @@ void AgentLoopCoroutine(ref@ requestRef) {
     }
 }
 
-void ProcessToolCalls() {
-    if (g_State != STATE_TOOL_CALLS_PENDING) {
+void ProcessToolCalls(uint generation) {
+    if (generation != g_RunGeneration || g_State != STATE_TOOL_CALLS_PENDING) {
         return;
     }
     g_State = STATE_EXECUTING_TOOLS;
 
     for (uint i = 0; i < g_PendingToolCalls.Length; i++) {
+        if (generation != g_RunGeneration) return;
+
         Json::Value@ toolCall = g_PendingToolCalls[i];
         string name = toolCall["name"];
         Json::Value@ input = toolCall["input"];
@@ -221,16 +223,30 @@ void ProcessToolCalls() {
         Json::Value@ result = ToolAssembler::ExecuteToolCall(toolCall);
 
         Json::Value@ actualResult;
-        if (result.HasKey("request_id")) {
+        if (result is null) {
+            @actualResult = Json::Object();
+            actualResult["error"] = "Tool returned no response";
+        } else if (result.HasKey("request_id")) {
             string requestId = result["request_id"];
             Json::Value@ pollReq = Json::Object();
             pollReq["requestId"] = requestId;
+            uint pollStartedAt = Time::Now;
 
             while (true) {
                 yield();
                 sleep(500);
+                if (generation != g_RunGeneration) return;
+                if (Time::Now - pollStartedAt >= 120000) {
+                    @actualResult = Json::Object();
+                    actualResult["error"] = "Timed out waiting for tool result";
+                    break;
+                }
                 Json::Value@ pollResult = McpTM::GetResult(pollReq);
-                if (pollResult.HasKey("status")) {
+                if (pollResult is null) {
+                    @actualResult = Json::Object();
+                    actualResult["error"] = "Tool polling returned no response";
+                    break;
+                } else if (pollResult.HasKey("status")) {
                     string status = pollResult["status"];
                     if (status == "done") {
                         if (pollResult.HasKey("result")) {
@@ -268,10 +284,11 @@ void ProcessToolCalls() {
         }
     }
 
+    if (generation != g_RunGeneration) return;
     g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
     g_State = STATE_AWAITING_LLM;
     AgentUI::IncrementStep();
-    startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(g_RunGeneration, ""));
+    startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(generation, ""));
 }
 
 bool IsToolResultSuccess(Json::Value@ r) {
