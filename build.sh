@@ -119,6 +119,10 @@ else
   version="$(awk -F= '/^version/ { gsub(/[ "]/, "", $2); print $2; exit }' info.toml)"
   out="$plugin_name-$version.op"
   rm -f "$out"
-  7z a "$out" ./src/* ./info.toml ./README.md
+  package_files=(./src/* ./info.toml)
+  if [[ -f README.md ]]; then
+    package_files+=(./README.md)
+  fi
+  7z a "$out" "${package_files[@]}"
   echo "Built $out"
 fi
