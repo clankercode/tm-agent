@@ -81,6 +81,30 @@ namespace AgentUnitTests {
         Assert(!serialized.Contains("\"role\":\"system\""), "Anthropic messages must not contain system roles");
     }
 
+    void Test_OpenAIReasoningItems_SurviveHistory() {
+        LlmHistory::ClearHistory();
+        Json::Value@ reasoningItems = Json::Array();
+        Json::Value@ reasoning = Json::Object();
+        reasoning["type"] = "reasoning";
+        reasoning["id"] = "rs_test";
+        reasoning["encrypted_content"] = "opaque";
+        reasoningItems.Add(reasoning);
+
+        Json::Value@ toolCall = Json::Object();
+        toolCall["name"] = "GetCursor";
+        toolCall["input"] = Json::Object();
+        toolCall["id"] = "call_reasoning";
+        array<Json::Value@> toolCalls;
+        toolCalls.Resize(1);
+        @toolCalls[0] = toolCall;
+        LlmHistory::AddAssistantToolCalls("", toolCalls, reasoningItems);
+
+        Json::Value@ messages = LlmHistory::GetMessagesForLlm(ToolAssembler::GetToolList());
+        string serialized = Json::Write(messages);
+        Assert(serialized.Contains("\"reasoning_items\""), "reasoning items should remain in provider history");
+        Assert(serialized.Contains("\"encrypted_content\":\"opaque\""), "encrypted reasoning content should round-trip");
+    }
+
     void Test_ContextStats_GrowWithMessages() {
         LlmHistory::ClearHistory();
         Json::Value@ tools = ToolAssembler::GetToolList();
@@ -149,6 +173,7 @@ namespace AgentUnitTests {
         RegisterUnitTest("inventory tools are present", Test_InventoryTools_ArePresent);
         RegisterUnitTest("tool result success handles nested MCP output", Test_ToolResultSuccess_HandlesNestedMcpOutput);
         RegisterUnitTest("Anthropic messages use native tool blocks", Test_AnthropicMessages_UseNativeToolBlocks);
+        RegisterUnitTest("OpenAI reasoning items survive history", Test_OpenAIReasoningItems_SurviveHistory);
         RegisterUnitTest("context stats grow with messages", Test_ContextStats_GrowWithMessages);
         RegisterUnitTest("compaction preserves tool pair", Test_Compaction_PreservesToolPair);
     }

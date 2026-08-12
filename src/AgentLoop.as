@@ -32,6 +32,18 @@ void SendMessage(const string &in content) {
 // Lives next to AgentLoopCoroutine because the AiApi::* cross-plugin
 // imports only bind correctly when invoked from this file.
 void ProviderTestCoro() {
+    try {
+        ProviderTestCoroImpl();
+    } catch {
+        string error = getExceptionInfo();
+        print("[tm-agent] provider test exception: " + error);
+        AgentUI::g_TestResult = "Provider exception";
+        AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
+        AgentUI::g_TestRunning = false;
+    }
+}
+
+void ProviderTestCoroImpl() {
     uint tStart = Time::Now;
     Provider provider = AgentSettings::S_Provider;
     string provLabel = (provider == Provider::MiniMax) ? "minimax" : "openai";
@@ -103,6 +115,22 @@ void ProviderTestCoro() {
 }
 
 void AgentLoopCoroutine(ref@ requestRef) {
+    AgentRunRequest@ request = cast<AgentRunRequest>(requestRef);
+    try {
+        AgentLoopCoroutineImpl(requestRef);
+    } catch {
+        if (request !is null && request.generation == g_RunGeneration) {
+            string error = getExceptionInfo();
+            print("[tm-agent] agent loop exception: " + error);
+            AgentUI::SetStatus(AgentUI::StatusKind::Error, "Agent request failed");
+            AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Agent request failed unexpectedly.");
+            g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
+            g_State = STATE_IDLE;
+        }
+    }
+}
+
+void AgentLoopCoroutineImpl(ref@ requestRef) {
     AgentRunRequest@ request = cast<AgentRunRequest>(requestRef);
     if (request is null || request.generation != g_RunGeneration) return;
 
@@ -192,14 +220,16 @@ void AgentLoopCoroutine(ref@ requestRef) {
 
     auto parsedToolCalls = ToolAssembler::ParseToolCalls(resp);
     if (parsedToolCalls.Length > 0) {
-        LlmHistory::AddAssistantToolCalls(text, parsedToolCalls);
+        Json::Value@ reasoningItems = resp.HasKey("reasoning_items") ? resp["reasoning_items"] : null;
+        LlmHistory::AddAssistantToolCalls(text, parsedToolCalls, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
         g_PendingToolCalls = parsedToolCalls;
         g_State = STATE_TOOL_CALLS_PENDING;
         ProcessToolCalls(request.generation);
     } else {
-        LlmHistory::AddAssistantMessage(text);
+        Json::Value@ reasoningItems = resp.HasKey("reasoning_items") ? resp["reasoning_items"] : null;
+        LlmHistory::AddAssistantMessage(text, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
         g_State = STATE_IDLE;
@@ -208,6 +238,21 @@ void AgentLoopCoroutine(ref@ requestRef) {
 }
 
 void ProcessToolCalls(uint generation) {
+    try {
+        ProcessToolCallsImpl(generation);
+    } catch {
+        if (generation == g_RunGeneration) {
+            string error = getExceptionInfo();
+            print("[tm-agent] tool execution exception: " + error);
+            AgentUI::SetStatus(AgentUI::StatusKind::Error, "Tool execution failed");
+            AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Tool execution failed unexpectedly.");
+            g_PendingToolCalls.RemoveRange(0, g_PendingToolCalls.Length);
+            g_State = STATE_IDLE;
+        }
+    }
+}
+
+void ProcessToolCallsImpl(uint generation) {
     if (generation != g_RunGeneration || g_State != STATE_TOOL_CALLS_PENDING) {
         return;
     }

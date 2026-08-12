@@ -49,11 +49,15 @@ namespace LlmHistory {
         g_Messages.InsertLast(AiApi::NewMessage("user", content));
     }
 
-    void AddAssistantMessage(const string &in content) {
-        g_Messages.InsertLast(AiApi::NewMessage("assistant", content));
+    void AddAssistantMessage(const string &in content, Json::Value@ reasoningItems = null) {
+        Json::Value@ msg = AiApi::NewMessage("assistant", content);
+        if (reasoningItems !is null && reasoningItems.GetType() == Json::Type::Array && reasoningItems.Length > 0) {
+            msg["reasoning_items"] = reasoningItems;
+        }
+        g_Messages.InsertLast(msg);
     }
 
-    void AddAssistantToolCalls(const string &in content, const array<Json::Value@> &in toolCalls) {
+    void AddAssistantToolCalls(const string &in content, const array<Json::Value@> &in toolCalls, Json::Value@ reasoningItems = null) {
         Json::Value msg = Json::Object();
         msg["role"] = "assistant";
         msg["content"] = content;
@@ -62,6 +66,9 @@ namespace LlmHistory {
             calls.Add(toolCalls[i]);
         }
         msg["tool_calls"] = calls;
+        if (reasoningItems !is null && reasoningItems.GetType() == Json::Type::Array && reasoningItems.Length > 0) {
+            msg["reasoning_items"] = reasoningItems;
+        }
         g_Messages.InsertLast(msg);
     }
 
