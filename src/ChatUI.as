@@ -990,12 +990,8 @@ namespace AgentUI {
     }
 
     bool ToolResultLooksSuccessful(const string &in body) {
-        // Detect explicit failure markers; default to success so
-        // results that don't carry a flag still render as ✓.
-        if (body.Contains("\"success\":false")) return false;
-        if (body.Contains("\"ok\":false")) return false;
-        if (body.Contains("\"error\":\"") && !body.Contains("\"error\":\"\"")) return false;
-        return true;
+        Json::Value@ parsed = Json::Parse(body);
+        return parsed !is null && IsToolResultSuccess(parsed);
     }
 
     void DrawMessage(Message@ msg, bool tightTop = false, bool tightBottom = false) {

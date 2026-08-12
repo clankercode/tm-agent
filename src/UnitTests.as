@@ -45,6 +45,42 @@ namespace AgentUnitTests {
         Assert(toolJson.Contains("SearchInventory"), "inventory search tool should be registered");
     }
 
+    void Test_ToolResultSuccess_HandlesNestedMcpOutput() {
+        Json::Value@ nestedSuccess = Json::Parse('{"output":{"success":true}}');
+        Json::Value@ nestedFailure = Json::Parse('{"output":{"success":false}}');
+        Json::Value@ topLevelFailure = Json::Parse('{"success":false,"error":"failed"}');
+
+        Assert(IsToolResultSuccess(nestedSuccess), "nested MCP success should pass");
+        Assert(!IsToolResultSuccess(nestedFailure), "nested MCP failure should fail");
+        Assert(!IsToolResultSuccess(topLevelFailure), "top-level failure should fail");
+        Assert(!AgentUI::ToolResultLooksSuccessful('{ "output": { "success": false } }'),
+            "tool result UI should parse formatted nested failures");
+    }
+
+    void Test_AnthropicMessages_UseNativeToolBlocks() {
+        LlmHistory::ClearHistory();
+        LlmHistory::AddUserMessage("inspect cursor");
+
+        Json::Value@ toolCall = Json::Object();
+        toolCall["name"] = "GetCursor";
+        toolCall["input"] = Json::Object();
+        toolCall["id"] = "call_native";
+        array<Json::Value@> toolCalls;
+        toolCalls.Resize(1);
+        @toolCalls[0] = toolCall;
+        LlmHistory::AddAssistantToolCalls("", toolCalls);
+        LlmHistory::AddToolResult("call_native", "GetCursor", '{"output":{"success":true}}');
+
+        string system;
+        Json::Value@ messages = LlmHistory::GetMessagesForAnthropic(ToolAssembler::GetToolList(), system);
+        string serialized = Json::Write(messages);
+        Assert(system.Contains("TOOLS:"), "Anthropic system prompt should be split out");
+        Assert(serialized.Contains("\"type\":\"tool_use\""), "assistant tool call should become tool_use");
+        Assert(serialized.Contains("\"type\":\"tool_result\""), "tool result should become tool_result");
+        Assert(serialized.Contains("\"tool_use_id\":\"call_native\""), "tool result should retain tool call id");
+        Assert(!serialized.Contains("\"role\":\"system\""), "Anthropic messages must not contain system roles");
+    }
+
     void Test_ContextStats_GrowWithMessages() {
         LlmHistory::ClearHistory();
         Json::Value@ tools = ToolAssembler::GetToolList();
@@ -111,6 +147,8 @@ namespace AgentUnitTests {
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
         RegisterUnitTest("system prompt tracks tool list", Test_SystemPrompt_TracksToolList);
         RegisterUnitTest("inventory tools are present", Test_InventoryTools_ArePresent);
+        RegisterUnitTest("tool result success handles nested MCP output", Test_ToolResultSuccess_HandlesNestedMcpOutput);
+        RegisterUnitTest("Anthropic messages use native tool blocks", Test_AnthropicMessages_UseNativeToolBlocks);
         RegisterUnitTest("context stats grow with messages", Test_ContextStats_GrowWithMessages);
         RegisterUnitTest("compaction preserves tool pair", Test_Compaction_PreservesToolPair);
     }

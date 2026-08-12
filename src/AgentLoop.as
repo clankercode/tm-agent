@@ -129,7 +129,9 @@ void AgentLoopCoroutine(ref@ requestRef) {
 
     Json::Value@ resp;
     if (provider == Provider::MiniMax) {
-        @resp = AiApi::Anthropic_Complete(apiKey, model, messages, ToolAssembler::GetToolList());
+        string system;
+        Json::Value@ anthropicMessages = LlmHistory::GetMessagesForAnthropic(tools, system);
+        @resp = AiApi::Anthropic_Complete(apiKey, model, anthropicMessages, ToolAssembler::GetToolList(), system);
     } else {
         array<string> responsesPrefixes = {"gpt-5"};
         AiApi::ILlmProvider@ oai = AiApi::NewOpenAIProvider(apiKey, responsesPrefixes);
@@ -296,6 +298,12 @@ bool IsToolResultSuccess(Json::Value@ r) {
     if (r.HasKey("error")) return false;
     if (r.HasKey("success") && !bool(r["success"])) return false;
     if (r.HasKey("ok") && !bool(r["ok"])) return false;
+    if (r.HasKey("output") && r["output"].GetType() == Json::Type::Object) {
+        Json::Value@ output = r["output"];
+        if (output.HasKey("error")) return false;
+        if (output.HasKey("success") && !bool(output["success"])) return false;
+        if (output.HasKey("ok") && !bool(output["ok"])) return false;
+    }
     return true;
 }
 

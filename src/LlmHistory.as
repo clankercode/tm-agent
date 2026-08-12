@@ -274,4 +274,61 @@ namespace LlmHistory {
 
         return msgs;
     }
+
+    Json::Value@ GetMessagesForAnthropic(Json::Value@ tools, string &out system) {
+        Json::Value@ source = GetMessagesForLlm(tools);
+        Json::Value@ messages = Json::Array();
+        system = "";
+
+        for (uint i = 0; i < source.Length; i++) {
+            Json::Value@ msg = source[i];
+            if (msg is null || msg.GetType() != Json::Type::Object) continue;
+            string role = msg.HasKey("role") ? string(msg["role"]) : "";
+            string text = msg.HasKey("content") ? string(msg["content"]) : "";
+
+            if (role == "system") {
+                if (system.Length > 0) system += "\n\n";
+                system += text;
+                continue;
+            }
+
+            Json::Value@ converted = Json::Object();
+            converted["role"] = role == "assistant" ? "assistant" : "user";
+            if (msg.HasKey("tool_call_id")) {
+                Json::Value@ content = Json::Array();
+                Json::Value@ block = Json::Object();
+                block["type"] = "tool_result";
+                block["tool_use_id"] = string(msg["tool_call_id"]);
+                block["content"] = text;
+                content.Add(block);
+                converted["content"] = content;
+            } else if (role == "assistant" && msg.HasKey("tool_calls")
+                && msg["tool_calls"].GetType() == Json::Type::Array) {
+                Json::Value@ content = Json::Array();
+                if (text.Length > 0) {
+                    Json::Value@ textBlock = Json::Object();
+                    textBlock["type"] = "text";
+                    textBlock["text"] = text;
+                    content.Add(textBlock);
+                }
+                Json::Value@ calls = msg["tool_calls"];
+                for (uint j = 0; j < calls.Length; j++) {
+                    Json::Value@ call = calls[j];
+                    if (call is null || call.GetType() != Json::Type::Object) continue;
+                    Json::Value@ toolUse = Json::Object();
+                    toolUse["type"] = "tool_use";
+                    toolUse["id"] = call.HasKey("id") ? string(call["id"]) : "call_" + j;
+                    toolUse["name"] = call.HasKey("name") ? string(call["name"]) : "";
+                    toolUse["input"] = call.HasKey("input") ? call["input"] : Json::Object();
+                    content.Add(toolUse);
+                }
+                converted["content"] = content;
+            } else {
+                converted["content"] = text;
+            }
+            messages.Add(converted);
+        }
+
+        return messages;
+    }
 }

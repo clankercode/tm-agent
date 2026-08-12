@@ -17,7 +17,7 @@ void Update(float dt) {
 #endif
 
 void OnDestroyed() {
-    AgentUI::ClearMessages();
+    CancelCurrentRun();
 }
 
 void OnDisabled() {
