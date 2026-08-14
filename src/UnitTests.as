@@ -42,7 +42,7 @@ namespace AgentUnitTests {
         Json::Value@ tools = ToolAssembler::GetToolList();
         string toolJson = Json::Write(tools);
         Assert(toolJson.Contains("GetInventorySummary"), "inventory summary tool should be registered");
-        Assert(toolJson.Contains("SearchInventory"), "inventory search tool should be registered");
+        Assert(toolJson.Contains("FindInventory"), "inventory search tool should be registered (tm-control-mcp name)");
     }
 
     void Test_ToolResultSuccess_HandlesNestedMcpOutput() {
@@ -140,7 +140,10 @@ namespace AgentUnitTests {
         LlmHistory::AddToolResult("call_1", "GetCursor", '{"success":true,"output":{"coord":[1,2,3]}}');
         LlmHistory::AddUserMessage("latest turn");
 
-        LlmHistory::CompactHistory(tools, 25000);
+        // Budget must clear the fixed tool-schema overhead. The tm-control-mcp
+        // registry (~112 tools) serializes to roughly 50k request bytes, so the
+        // old 25000 cap no longer even admits the trusted fixed content.
+        LlmHistory::CompactHistory(tools, 120000);
 
         Assert(LlmHistory::g_CompactedSummary.Length > 0, "compaction summary should be populated");
         Assert(LlmHistory::g_Messages.Length > 0, "history should still contain recent turns");

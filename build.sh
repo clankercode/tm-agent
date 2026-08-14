@@ -27,7 +27,7 @@ plugin_slug() {
 
 local_dependency_root() {
   case "$1" in
-    McpTM|mcp-tm) echo "../tm-mcptm" ;;
+    TmMcp|tm-control-mcp) echo "../tm-control-mcp" ;;
     AiApi|ai-api) echo "../tm-aiapi" ;;
     *) return 1 ;;
   esac
@@ -110,7 +110,14 @@ stage_local_dependencies() {
   for dep in $(local_dependencies); do
     if root="$(local_dependency_root "$dep")" && [[ -d "$root" ]]; then
       dep_slug="$(plugin_slug "$root")"
-      stage_folder_plugin "$root" "$dep_slug" 0 "$mode"
+      # Dependencies have their own repos and LSP gates; several (tm-control-mcp)
+      # flood false positives under this harness. Only the primary plugin is
+      # LSP-checked here; in-game load is the ground-truth gate for deps.
+      # (Subshell so the env override does not leak — `VAR=x func` persists in bash.)
+      (
+        export TM_PLUGIN_SKIP_LSP_CHECK=1
+        stage_folder_plugin "$root" "$dep_slug" 0 "$mode"
+      )
       remote_load_folder "$dep_slug"
     fi
   done

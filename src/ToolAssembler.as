@@ -1,147 +1,42 @@
-import Json::Value@ PlaceBlock(Json::Value@ input) from "McpTM";
-import Json::Value@ RemoveBlock(Json::Value@ input) from "McpTM";
-import Json::Value@ GetCursor(Json::Value@ input) from "McpTM";
-import Json::Value@ GetMapInfo(Json::Value@ input) from "McpTM";
-import Json::Value@ GetBlocks(Json::Value@ input) from "McpTM";
-import Json::Value@ GetItems(Json::Value@ input) from "McpTM";
-import Json::Value@ GetInventorySummary(Json::Value@ input) from "McpTM";
-import Json::Value@ SearchInventory(Json::Value@ input) from "McpTM";
-import Json::Value@ GetBlockAt(Json::Value@ input) from "McpTM";
-import Json::Value@ GetPickedBlock(Json::Value@ input) from "McpTM";
-import Json::Value@ GetPlacementMode(Json::Value@ input) from "McpTM";
-import Json::Value@ GetEditMode(Json::Value@ input) from "McpTM";
-import Json::Value@ Undo(Json::Value@ input) from "McpTM";
-import Json::Value@ Redo(Json::Value@ input) from "McpTM";
-import Json::Value@ TestMap(Json::Value@ input) from "McpTM";
-import Json::Value@ SaveMap(Json::Value@ input) from "McpTM";
-import Json::Value@ GetResult(Json::Value@ input) from "McpTM";
-import Json::Value@ SetCursorBlock(Json::Value@ input) from "McpTM";
-import Json::Value@ SetCursorItem(Json::Value@ input) from "McpTM";
-import Json::Value@ GetRaceData(Json::Value@ input) from "McpTM";
-import Json::Value@ GetPlayers(Json::Value@ input) from "McpTM";
-import Json::Value@ GetMode(Json::Value@ input) from "McpTM";
-import Json::Value@ GetServerInfo(Json::Value@ input) from "McpTM";
+// In-process tool bridge to tm-control-mcp (module TmMcp).
+//
+// Tools are dispatched by name through TmMcp::CallTool / DispatchAsync —
+// the same registry the socket server uses. The tool list (names,
+// descriptions, input schemas) is forwarded from TmMcp::GetToolList so
+// tm-agent and tm-control-mcp never drift.
+//
+// The TmMcp::* import declarations are provided by TmMcp_Export.as, which
+// Openplanet compiles into this plugin via the tm-control-mcp dependency
+// (exports = ["TmMcp_Export.as"]). Do NOT redeclare them here.
 
 namespace ToolAssembler {
+    // Tools that must run inside a coroutine (they yield/sleep). The socket
+    // server runs every request inside its client coroutine; in-process
+    // callers route these through DispatchAsync so they run on their own
+    // coroutine instead of the caller's.
+    const string[] ASYNC_TOOLS = {
+        "ControlValidation",
+        "SaveMapAs",
+        "CreateMapViaMenu",
+        "EditNewMap",
+        "OpenMapInEditor",
+        "BackToMainMenu",
+        "SetMenuPage",
+        "WaitUntil",
+        "RunManialinkScript"
+    };
+
+    bool IsAsyncTool(const string &in name) {
+        for (uint i = 0; i < ASYNC_TOOLS.Length; i++) {
+            if (ASYNC_TOOLS[i] == name) return true;
+        }
+        return false;
+    }
+
     Json::Value@ GetToolList() {
-        Json::Value@ tools = Json::Array();
-        
-        AddTool(tools, "PlaceBlock",
-            "Place a block in the editor. Inputs: blockName (string), x, y, z (int coords), dir (North/East/South/West)",
-            '{"type": "object", "properties": {"blockName": {"type": "string"}, "x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"}, "dir": {"type": "string", "enum": ["North", "East", "South", "West"]}}, "required": ["blockName", "x", "y", "z", "dir"]}'
-        );
-        
-        AddTool(tools, "RemoveBlock",
-            "Remove a block at coord. Inputs: x, y, z (int coords)",
-            '{"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"}}, "required": ["x", "y", "z"]}'
-        );
-        
-        AddTool(tools, "GetCursor",
-            "Get the cursor position, direction, and picked block/item",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetMapInfo",
-            "Get map name and object counts",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetBlocks",
-            "Get blocks near a point. Inputs: x, y, z (int coords), radius (int), filter (all/classic/ghost/terrain)",
-            '{"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"}, "radius": {"type": "integer"}, "filter": {"type": "string"}}, "required": ["x", "y", "z", "radius", "filter"]}'
-        );
-        
-        AddTool(tools, "GetItems",
-            "Get items near a point. Inputs: x, y, z (float coords), radius (float)",
-            '{"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}, "radius": {"type": "number"}}, "required": ["x", "y", "z", "radius"]}'
-        );
-
-        AddTool(tools, "GetInventorySummary",
-            "Summarize the current inventory tree, current directory, and selected node.",
-            '{"type": "object", "properties": {}}'
-        );
-
-        AddTool(tools, "SearchInventory",
-            "Search the E++ inventory cache for blocks, items, and macroblocks by name substring. Inputs: query (optional, case-insensitive substring), type (all/block/item/macroblock), limit (optional, default 25, max 200).",
-            '{"type": "object", "properties": {"query": {"type": "string"}, "type": {"type": "string", "enum": ["all", "block", "item", "macroblock"]}, "limit": {"type": "integer"}}, "required": []}'
-        );
-        
-        AddTool(tools, "GetBlockAt",
-            "Get block info at exact coord. Inputs: x, y, z",
-            '{"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "z": {"type": "integer"}}, "required": ["x", "y", "z"]}'
-        );
-        
-        AddTool(tools, "GetPickedBlock",
-            "Get the currently selected block at the cursor",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetPlacementMode",
-            "Get current placement mode (Block/Item/Macroblock/etc)",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetEditMode",
-            "Get current edit mode (Place/Erase/Pick/etc)",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "Undo",
-            "Undo last editor action",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "Redo",
-            "Redo last undone action",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "TestMap",
-            "Test the map. Inputs: modeName (optional, e.g. TM_Race or empty for default). Returns a request_id - poll GetResult.",
-            '{"type": "object", "properties": {"modeName": {"type": "string"}}, "required": []}'
-        );
-        
-        AddTool(tools, "SaveMap",
-            "Save the map. Inputs: fileName (optional, defaults to Autosave). Returns a request_id - poll GetResult.",
-            '{"type": "object", "properties": {"fileName": {"type": "string"}}, "required": []}'
-        );
-        
-        AddTool(tools, "GetResult",
-            "Poll for async operation result. Inputs: requestId (from TestMap/SaveMap)",
-            '{"type": "object", "properties": {"requestId": {"type": "string"}}, "required": ["requestId"]}'
-        );
-        
-        AddTool(tools, "SetCursorBlock",
-            "Set the cursor's selected block. Inputs: blockName",
-            '{"type": "object", "properties": {"blockName": {"type": "string"}}, "required": ["blockName"]}'
-        );
-        
-        AddTool(tools, "SetCursorItem",
-            "Set the cursor's selected item. Inputs: itemName",
-            '{"type": "object", "properties": {"itemName": {"type": "string"}}, "required": ["itemName"]}'
-        );
-        
-        AddTool(tools, "GetRaceData",
-            "Get current race data (players, times, checkpoints)",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetPlayers",
-            "Get list of players with CP info",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetMode",
-            "Get current mode (Editor/Race/Spectator/Menu/Unknown)",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        AddTool(tools, "GetServerInfo",
-            "Get server name and player count",
-            '{"type": "object", "properties": {}}'
-        );
-        
-        return tools;
+        // Forward TmMcp's registry (already in Anthropic tool format:
+        // {name, description, input_schema}).
+        return TmMcp::GetToolList();
     }
 
     void AddTool(Json::Value@ tools, const string &in name, const string &in desc, const string &in inputSchemaJson) {
@@ -184,47 +79,49 @@ namespace ToolAssembler {
     bool IsFocusableTool(const string &in name) {
         return name == "PlaceBlock"
             || name == "RemoveBlock"
-            || name == "GetBlockAt";
+            || name == "GetBlockAt"
+            || name == "PlaceBlockViaEditorPlusPlus"
+            || name == "PlaceItemViaEditorPlusPlus";
     }
 
     Json::Value@ ExecuteToolCall(Json::Value@ toolCall) {
         string name = string(toolCall["name"]);
         Json::Value@ input = toolCall["input"];
-        Json::Value@ result;
+        if (input is null) @input = Json::Object();
 
-        if (name == "PlaceBlock") @result = PlaceBlock(input);
-        else if (name == "RemoveBlock") @result = RemoveBlock(input);
-        else if (name == "GetCursor") @result = GetCursor(input);
-        else if (name == "GetMapInfo") @result = GetMapInfo(input);
-        else if (name == "GetBlocks") @result = GetBlocks(input);
-        else if (name == "GetItems") @result = GetItems(input);
-        else if (name == "GetInventorySummary") @result = GetInventorySummary(input);
-        else if (name == "SearchInventory") @result = SearchInventory(input);
-        else if (name == "GetBlockAt") @result = GetBlockAt(input);
-        else if (name == "GetPickedBlock") @result = GetPickedBlock(input);
-        else if (name == "GetPlacementMode") @result = GetPlacementMode(input);
-        else if (name == "GetEditMode") @result = GetEditMode(input);
-        else if (name == "Undo") @result = Undo(input);
-        else if (name == "Redo") @result = Redo(input);
-        else if (name == "TestMap") @result = TestMap(input);
-        else if (name == "SaveMap") @result = SaveMap(input);
-        else if (name == "GetResult") @result = GetResult(input);
-        else if (name == "SetCursorBlock") @result = SetCursorBlock(input);
-        else if (name == "SetCursorItem") @result = SetCursorItem(input);
-        else if (name == "GetRaceData") @result = GetRaceData(input);
-        else if (name == "GetPlayers") @result = GetPlayers(input);
-        else if (name == "GetMode") @result = GetMode(input);
-        else if (name == "GetServerInfo") @result = GetServerInfo(input);
-        else {
+        if (!TmMcp::IsToolName(name)) {
             Json::Value err = Json::Object();
             err["success"] = false;
             err["error"] = "unknown tool: " + name;
             return err;
         }
 
-        if (IsFocusableTool(name) && result !is null) {
-            CameraFocus::TryFocusFromResult(result, input);
+        Json::Value@ result;
+        if (IsAsyncTool(name)) {
+            // Non-blocking dispatch: returns {request_id, status:"pending"};
+            // AgentLoop polls TmMcp::GetResult until done/error.
+            try {
+                @result = TmMcp::DispatchAsync(name, input);
+            } catch {
+                Json::Value err = Json::Object();
+                err["success"] = false;
+                err["error"] = "tool " + name + " dispatch failed: " + getExceptionInfo();
+                return err;
+            }
+        } else {
+            try {
+                @result = TmMcp::CallTool(name, input);
+            } catch {
+                Json::Value err = Json::Object();
+                err["success"] = false;
+                err["error"] = "tool " + name + " threw: " + getExceptionInfo();
+                return err;
+            }
+            if (IsFocusableTool(name) && result !is null) {
+                CameraFocus::TryFocusFromResult(result, input);
+            }
         }
+
         return result;
     }
 
@@ -237,7 +134,8 @@ namespace ToolAssembler {
 
         Json::Value@ empty = Json::Object();
 
-        Json::Value@ mapInfo = GetMapInfo(empty);
+        // Map info (TmMcp MapSummary: name, nbBlocks, nbItems, ...)
+        Json::Value@ mapInfo = TmMcp::CallTool("GetMapInfo", empty);
         if (mapInfo !is null && mapInfo.HasKey("output")) {
             Json::Value@ mapOut = mapInfo["output"];
             string mapName = JsonX::Lookup_StringOrDefault(mapOut, "name", "unknown");
@@ -246,39 +144,36 @@ namespace ToolAssembler {
             state += "- Map: " + mapName + " (" + nbBlocks + " blocks, " + nbItems + " items)\n";
         }
 
-        Json::Value@ cursor = GetCursor(empty);
+        // Cursor (TmMcp GetCursor: coord, dir, blockName/blockIdName)
+        Json::Value@ cursor = TmMcp::CallTool("GetCursor", empty);
         if (cursor !is null && cursor.HasKey("output")) {
             Json::Value@ curOut = cursor["output"];
             string coord = curOut.HasKey("coord") ? Json::Write(curOut["coord"]) : "[?]";
             string dir = JsonX::Lookup_StringOrDefault(curOut, "dir", "?");
-            string pickedBlock = JsonX::Lookup_StringOrDefault(curOut, "pickedBlock", "!");
-            string pickedItem = JsonX::Lookup_StringOrDefault(curOut, "pickedItem", "!");
-            state += "- Cursor: " + coord + " dir=" + dir + " pickedBlock=" + pickedBlock + " pickedItem=" + pickedItem + "\n";
+            string blockName = JsonX::Lookup_StringOrDefault(curOut, "blockName", "!");
+            state += "- Cursor: " + coord + " dir=" + dir + " block=" + blockName + "\n";
         }
 
-        Json::Value@ placement = GetPlacementMode(empty);
-        if (placement !is null && placement.HasKey("output")) {
-            Json::Value@ placeOut = placement["output"];
-            string mode = JsonX::Lookup_StringOrDefault(placeOut, "mode", "");
-            if (mode.Length > 0) {
-                state += "- Placement mode: " + mode + "\n";
+        // Edit/placement mode (ControlEditMode status: editModeName, placeModeName)
+        Json::Value@ em = TmMcp::CallTool("ControlEditMode", empty);
+        if (em !is null && em.HasKey("output")) {
+            Json::Value@ emOut = em["output"];
+            string editMode = JsonX::Lookup_StringOrDefault(emOut, "editModeName", "");
+            string placeMode = JsonX::Lookup_StringOrDefault(emOut, "placeModeName", "");
+            if (editMode.Length > 0) {
+                state += "- Modes: edit=" + editMode + " place=" + placeMode + "\n";
             }
         }
 
-        Json::Value@ inv = GetInventorySummary(empty);
+        // Inventory (TmMcp InventorySummary: nbBlocks, nbItems, nbMacroblocks, loadingStatusShort)
+        Json::Value@ inv = TmMcp::CallTool("GetInventorySummary", empty);
         if (inv !is null && inv.HasKey("output")) {
             Json::Value@ invOut = inv["output"];
             string invStatus = JsonX::Lookup_StringOrDefault(invOut, "loadingStatusShort", "unknown");
-            string currentDir = JsonX::Lookup_StringOrDefault(invOut, "currentDirectoryPath", "");
-            string selectedNode = "";
-            if (invOut.HasKey("currentSelectedNode") && invOut["currentSelectedNode"].GetType() == Json::Type::Object) {
-                selectedNode = JsonX::Lookup_StringOrDefault(invOut["currentSelectedNode"], "path", "");
-            }
-            state += "- Inventory: " + invStatus;
-            if (currentDir.Length > 0) state += " dir=" + currentDir;
-            if (selectedNode.Length > 0) state += " selected=" + selectedNode;
-            state += "\n";
-
+            string nbBlocks = JsonX::Lookup_StringOrDefault(invOut, "nbBlocks", "?");
+            string nbItems = JsonX::Lookup_StringOrDefault(invOut, "nbItems", "?");
+            string nbMbs = JsonX::Lookup_StringOrDefault(invOut, "nbMacroblocks", "?");
+            state += "- Inventory: " + invStatus + " (" + nbBlocks + " blocks, " + nbItems + " items, " + nbMbs + " macroblocks)\n";
         }
 
         return state.Trim();

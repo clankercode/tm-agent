@@ -6,7 +6,7 @@ version  = "0.2.0"
 
 [script]
 #__DEFINES__
-dependencies = ["mcp-tm", "ai-api", "MLHook"]
+dependencies = ["tm-control-mcp", "ai-api", "MLHook"]
 export_dependencies = ["MLHook"]
 
 module = "Agent"

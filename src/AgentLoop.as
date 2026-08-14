@@ -372,7 +372,7 @@ Json::Value@ ExecutePendingToolCall(Json::Value@ toolCall, uint generation) {
 
         Json::Value@ pollResult;
         try {
-            @pollResult = McpTM::GetResult(pollReq);
+            @pollResult = TmMcp::GetResult(pollReq);
         } catch {
             print("[tm-agent] tool polling threw: " + getExceptionInfo());
             return NewToolError("Tool polling failed unexpectedly");
