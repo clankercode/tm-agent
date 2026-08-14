@@ -2,7 +2,7 @@
 
 **An AI agent that works inside Trackmania.**
 
-`tm-agent` is an [Openplanet](https://openplanet.dev/) plugin with a native chat UI, provider-aware conversation history, and direct access to Trackmania tools through [`mcp-tm`](https://github.com/clankercode/tm-mcptm). Ask it to inspect the current map, reason about editor state, call tools, and continue from structured results without leaving the game.
+`tm-agent` is an [Openplanet](https://openplanet.dev/) plugin with a native chat UI, provider-aware conversation history, and direct access to Trackmania tools through the in-process `mcp-tm` Openplanet library. Ask it to inspect the current map, reason about editor state, call tools, and continue from structured results without leaving the game.
 
 <p align="center">
   <img src="tm_agent_ui.png" alt="TM Agent chat window inside the Trackmania map editor" width="900" />
@@ -14,15 +14,15 @@
 |---|---|
 | **Platform** | Trackmania (current) + Openplanet |
 | **Providers** | MiniMax/Anthropic-compatible Messages API; OpenAI Chat Completions and Responses |
-| **Tool bridge** | `mcp-tm` plus `MLHook` |
+| **Tool bridge** | In-process `mcp-tm` Openplanet dependency plus `MLHook` |
 | **License** | Dual [Unlicense](./UNLICENSE) **or** [CC0 1.0](./CC0-1.0) — public domain / no attribution required |
-| **Status** | Active development (`info.toml` `0.1.0`) |
+| **Status** | Active development (`info.toml` `0.2.0`) |
 | **Releasing** | [RELEASE.md](./RELEASE.md) · [CHANGELOG.md](./CHANGELOG.md) |
 
 ## What it does
 
 - **In-game agent loop** — submit a task, watch provider turns and tool calls, and cancel or start a clean conversation safely.
-- **Trackmania-aware tools** — consumes the schemas and results exported by `mcp-tm`, including nested MCP success/error semantics.
+- **Trackmania-aware tools** — consumes schemas and results exported by the `mcp-tm` Openplanet module, including nested MCP success/error semantics.
 - **Provider-native history** — Anthropic `tool_use` / `tool_result` blocks and OpenAI Responses encrypted reasoning continuity.
 - **Operational visibility** — status, step timing, token usage, context pressure, per-tool latency, errors, and compaction controls.
 - **Resilient async lifecycle** — generation-based cancellation prevents stale provider/tool continuations from mutating a new chat.
@@ -32,16 +32,16 @@
 
 1. Trackmania with [Openplanet](https://openplanet.dev/) installed.
 2. Openplanet dependencies:
-   - `mcp-tm` — local Trackmania tool bridge
-   - `ai-api` — provider transport and shared interfaces
-   - `MLHook`
+   - `mcp-tm` — in-process Trackmania tool library; Openplanet module `McpTM`
+   - [AI API](https://github.com/clankercode/tm-aiapi) — provider transport and shared interfaces; Openplanet module `AiApi`
+   - [MLHook](https://openplanet.dev/plugin/mlhook) — dependency id `MLHook`
 3. An API key for the selected provider.
 
 API keys are stored through Openplanet password settings. Never commit keys or include them in screenshots/logs.
 
 ## Install for development
 
-Clone the three local plugins as siblings so `build.sh` can stage dependencies:
+For development, keep the source repositories as siblings so this repository's `build.sh` can stage its local dependencies:
 
 ```text
 my-plugins/
@@ -89,7 +89,7 @@ TM Agent UI / AgentLoop
         │
         ├── LlmHistory ── provider-native messages + context accounting
         │
-        ├── ai-api ───── MiniMax / OpenAI HTTP transports
+        ├── AI API ───── MiniMax / OpenAI HTTP transports
         │
         └── mcp-tm ───── Trackmania tool schemas, dispatch, and results
                               │
@@ -97,6 +97,8 @@ TM Agent UI / AgentLoop
 ```
 
 The agent keeps a generic local transcript, converts it for the active provider, executes returned tool calls asynchronously, stores structured results, and schedules the next provider turn. A monotonically increasing run generation invalidates stale async continuations after cancel, disable, or New Conversation.
+
+> **Naming note:** `mcp-tm` is the current in-process Openplanet dependency used by TM Agent. [TM Control MCP](https://github.com/clankercode/tm-control-mcp) is a separate localhost JSON service for external agents and scripts; it is not currently a drop-in replacement for the exported `McpTM` API used here.
 
 ## Release
 
