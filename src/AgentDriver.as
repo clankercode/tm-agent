@@ -329,6 +329,15 @@ namespace AgentDriver {
             resp["messages"] = arr;
             return resp;
         }
+        if (op == "get_token_stats") {
+            resp["ok"] = true;
+            resp["input"] = AgentUI::g_LastInputTokens;
+            resp["output"] = AgentUI::g_LastOutputTokens;
+            resp["total"] = AgentUI::g_LastTotalTokens;
+            resp["cachedRead"] = AgentUI::g_LastCachedReadTokens;
+            resp["cacheWrite"] = AgentUI::g_LastCacheWriteTokens;
+            return resp;
+        }
         if (op == "get_pill_rects") {
             // Verification: screen rects of the follow-mode pills as actually
             // laid out by DrawButtonGroup (hit boxes come from the same

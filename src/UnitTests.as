@@ -696,6 +696,40 @@ namespace AgentUnitTests {
         AgentSettings::S_SendToolImages = saved;
     }
 
+    // --- token usage cache split -------------------------------------------
+
+    void Test_TokenUsage_CacheSplitFromOpenAIShape() {
+        Json::Value@ usage = Json::Parse(
+            '{"input_tokens":100,"output_tokens":20,"total_tokens":120,'
+            '"cached_read_tokens":80,"cache_write_tokens":0}'
+        );
+        UsageSplit split = ParseUsage(usage);
+        Assert(split.input == 100, "input");
+        Assert(split.output == 20, "output");
+        Assert(split.total == 120, "total");
+        Assert(split.cachedRead == 80, "cached read");
+        Assert(split.cacheWrite == 0, "cache write");
+    }
+
+    void Test_TokenUsage_CacheSplitFromAnthropicShape() {
+        Json::Value@ usage = Json::Parse(
+            '{"input_tokens":200,"output_tokens":10,"total_tokens":210,'
+            '"cached_read_tokens":150,"cache_write_tokens":40}'
+        );
+        UsageSplit split = ParseUsage(usage);
+        Assert(split.input == 200, "anthropic input");
+        Assert(split.cachedRead == 150, "anthropic cached read");
+        Assert(split.cacheWrite == 40, "anthropic cache write");
+    }
+
+    void Test_TokenUsage_MissingFieldsAreZero() {
+        Json::Value@ usage = Json::Parse('{"input_tokens":9,"output_tokens":1}');
+        UsageSplit split = ParseUsage(usage);
+        Assert(split.input == 9, "bare input");
+        Assert(split.cachedRead == 0, "bare cached read");
+        Assert(split.cacheWrite == 0, "bare cache write");
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -730,6 +764,9 @@ namespace AgentUnitTests {
         RegisterUnitTest("tool images anthropic image conversion", Test_ToolImages_AnthropicImageConversion);
         RegisterUnitTest("tool images strip images recovers history", Test_ToolImages_StripImagesRecoversHistory);
         RegisterUnitTest("tool images model image gate matches setting", Test_ToolImages_ModelImageGateMatchesSetting);
+        RegisterUnitTest("token usage cache split openai shape", Test_TokenUsage_CacheSplitFromOpenAIShape);
+        RegisterUnitTest("token usage cache split anthropic shape", Test_TokenUsage_CacheSplitFromAnthropicShape);
+        RegisterUnitTest("token usage missing fields are zero", Test_TokenUsage_MissingFieldsAreZero);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);

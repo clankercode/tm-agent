@@ -145,11 +145,15 @@ namespace SessionLog {
     // Written when a response arrives — before the UI consumes it.
     // Provider/model ride on every exchange because they can change
     // mid-session; session_meta alone only reflects the session start.
-    void LogLlmExchange(int inputTokens, int outputTokens, int totalTokens, const string &in rawResp) {
+    void LogLlmExchange(int inputTokens, int outputTokens, int totalTokens, const string &in rawResp, int cachedReadTokens = 0, int cacheWriteTokens = 0) {
         Json::Value usage = Json::Object();
         usage["input_tokens"] = inputTokens;
         usage["output_tokens"] = outputTokens;
         usage["total_tokens"] = totalTokens;
+        if (cachedReadTokens > 0 || cacheWriteTokens > 0) {
+            usage["cached_read_tokens"] = cachedReadTokens;
+            usage["cache_write_tokens"] = cacheWriteTokens;
+        }
         Json::Value data = Json::Object();
         data["usage"] = usage;
         data["raw_response"] = rawResp;

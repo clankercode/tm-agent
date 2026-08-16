@@ -35,6 +35,29 @@ void SendMessage(const string &in content) {
     startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(generation, content));
 }
 
+// Token usage with the prompt-cache split. Providers bill cached input
+// separately; "cached read" is input served from cache (cheap), "cache
+// write" is input newly written to the cache (Anthropic surcharges it).
+// ai-api normalizes both into cached_read_tokens / cache_write_tokens.
+class UsageSplit {
+    int input = 0;
+    int output = 0;
+    int total = 0;
+    int cachedRead = 0;
+    int cacheWrite = 0;
+}
+
+UsageSplit ParseUsage(Json::Value@ usage) {
+    UsageSplit s;
+    if (usage is null || usage.GetType() != Json::Type::Object) return s;
+    s.input = usage.HasKey("input_tokens") ? int(usage["input_tokens"]) : 0;
+    s.output = usage.HasKey("output_tokens") ? int(usage["output_tokens"]) : 0;
+    s.total = usage.HasKey("total_tokens") ? int(usage["total_tokens"]) : s.input + s.output;
+    s.cachedRead = usage.HasKey("cached_read_tokens") ? int(usage["cached_read_tokens"]) : 0;
+    s.cacheWrite = usage.HasKey("cache_write_tokens") ? int(usage["cache_write_tokens"]) : 0;
+    return s;
+}
+
 // Mirror of g_State for FollowCam: busy while a run is in flight. Every
 // terminal path funnels through MarkIdle() so the follow camera always
 // hands control back.
@@ -276,12 +299,16 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     int lastIn = 0;
     int lastOut = 0;
     int lastTot = 0;
+    int lastCachedRead = 0;
+    int lastCacheWrite = 0;
     if (resp.HasKey("usage") && resp["usage"].GetType() == Json::Type::Object) {
-        Json::Value@ usage = resp["usage"];
-        lastIn = usage.HasKey("input_tokens") ? int(usage["input_tokens"]) : 0;
-        lastOut = usage.HasKey("output_tokens") ? int(usage["output_tokens"]) : 0;
-        lastTot = usage.HasKey("total_tokens") ? int(usage["total_tokens"]) : 0;
-        AgentUI::UpdateTokenStats(lastIn, lastOut, lastTot);
+        UsageSplit split = ParseUsage(resp["usage"]);
+        lastIn = split.input;
+        lastOut = split.output;
+        lastTot = split.total;
+        lastCachedRead = split.cachedRead;
+        lastCacheWrite = split.cacheWrite;
+        AgentUI::UpdateTokenStats(lastIn, lastOut, lastTot, lastCachedRead, lastCacheWrite);
     }
 
     string text = "";
@@ -293,7 +320,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         Json::Value@ reasoningItems = resp.HasKey("reasoning_items") ? resp["reasoning_items"] : null;
         // Log-before-UI: persist the exchange and the assistant turn before
         // any history/UI state mutates, so a crash cannot lose the response.
-        SessionLog::LogLlmExchange(lastIn, lastOut, lastTot, respDumpFull);
+        SessionLog::LogLlmExchange(lastIn, lastOut, lastTot, respDumpFull, lastCachedRead, lastCacheWrite);
         SessionLog::LogAssistantMessage(text);
         LlmHistory::AddAssistantToolCalls(text, parsedToolCalls, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
@@ -303,7 +330,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         ProcessToolCalls(request.generation);
     } else {
         Json::Value@ reasoningItems = resp.HasKey("reasoning_items") ? resp["reasoning_items"] : null;
-        SessionLog::LogLlmExchange(lastIn, lastOut, lastTot, respDumpFull);
+        SessionLog::LogLlmExchange(lastIn, lastOut, lastTot, respDumpFull, lastCachedRead, lastCacheWrite);
         SessionLog::LogAssistantMessage(text);
         LlmHistory::AddAssistantMessage(text, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);

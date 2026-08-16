@@ -80,6 +80,8 @@ namespace AgentUI {
     AgentStatus g_Status;
 
     int g_LastInputTokens = 0;
+int g_LastCachedReadTokens = 0;
+int g_LastCacheWriteTokens = 0;
     int g_LastOutputTokens = 0;
     int g_LastTotalTokens = 0;
     int g_RunningOutputTokens = 0;
@@ -230,15 +232,21 @@ namespace AgentUI {
             vec4 accentCol = vec4(0.95, 0.65, 0.15, 1.0);
             bool compacted = bool(stats["hasCompactedHistory"]);
 
-            array<string> labels = {"In", "Out", "Session", "Summary", "History", "Tools"};
+            array<string> labels = {"In", "Cache", "Out", "Session", "Summary", "History", "Tools"};
+            // Cache stat hidden when the provider reports no cache fields:
+            // keeps the row tight for providers without prompt caching.
+            bool hasCache = g_LastCachedReadTokens > 0 || g_LastCacheWriteTokens > 0;
+            if (!hasCache) labels.RemoveAt(1);
             array<string> values = {
                 FormatTokenCount(g_LastInputTokens),
+                FormatTokenCount(g_LastCachedReadTokens) + "r" + (g_LastCacheWriteTokens > 0 ? "+" + FormatTokenCount(g_LastCacheWriteTokens) + "w" : ""),
                 FormatTokenCount(g_LastOutputTokens),
                 FormatTokenCount(g_RunningOutputTokens),
                 FormatTokenCount(int(stats["summaryTokens"])),
                 FormatTokenCount(int(stats["historyTokens"])),
                 FormatTokenCount(int(stats["toolSchemaTokens"]))
             };
+            if (!hasCache) values.RemoveAt(1);
 
             vec2 winPos = UI::GetWindowPos();
             float rightEdge = winPos.x + UI::GetWindowSize().x - 16;
@@ -255,6 +263,18 @@ namespace AgentUI {
                     }
                 }
                 DrawInlineStat(labels[i], values[i], labelCol);
+                if (hasCache && labels[i] == "Cache" && UI::IsItemHovered()) {
+                    int fresh = g_LastInputTokens - g_LastCachedReadTokens - g_LastCacheWriteTokens;
+                    UI::SetTooltip(
+                        "Prompt cache (last request)\n"
+                        "cached read: " + FormatTokenCount(g_LastCachedReadTokens) + " input tokens served from cache (cheap)\n"
+                        "cache write: " + FormatTokenCount(g_LastCacheWriteTokens) + " input tokens newly written (Anthropic bills 1.25x)\n"
+                        "fresh input: " + FormatTokenCount(Math::Max(fresh, 0)) + " input tokens billed at full price"
+                    );
+                }
+                if (labels[i] == "In" && UI::IsItemHovered()) {
+                    UI::SetTooltip("Input tokens of the last request (all input, incl. cached)");
+                }
             }
 
             if (compacted) {
@@ -1805,6 +1825,8 @@ namespace AgentUI {
         g_StepCount = 0;
         g_Status.Set(StatusKind::Idle);
         g_LastInputTokens = 0;
+        g_LastCachedReadTokens = 0;
+        g_LastCacheWriteTokens = 0;
         g_LastOutputTokens = 0;
         g_LastTotalTokens = 0;
         g_RunningOutputTokens = 0;
@@ -1813,10 +1835,12 @@ namespace AgentUI {
         SessionLog::StartNewSession();
     }
 
-    void UpdateTokenStats(int inputTokens, int outputTokens, int totalTokens) {
+    void UpdateTokenStats(int inputTokens, int outputTokens, int totalTokens, int cachedReadTokens = 0, int cacheWriteTokens = 0) {
         g_LastInputTokens = inputTokens;
         g_LastOutputTokens = outputTokens;
         g_LastTotalTokens = totalTokens;
+        g_LastCachedReadTokens = cachedReadTokens;
+        g_LastCacheWriteTokens = cacheWriteTokens;
         g_RunningOutputTokens += outputTokens;
         AgentStats::RecordTokens(inputTokens, outputTokens);
     }
