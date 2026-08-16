@@ -1442,13 +1442,16 @@ namespace AgentUI {
             vec2 pSize = UI::MeasureString(peek);
             dl.AddText(vec2(tx, midY - pSize.y * 0.5), peekCol, peek);
 
-            // Collapsed screenshot chip: still show the image — a thumbnail
-            // (70% width) below the header row; hovering it pops a large
-            // preview overlay. Falls back to nothing when no texture.
+            // Collapsed screenshot chip: still show the image — a small
+            // thumbnail (35% width) below the header row; hovering pops a
+            // large preview overlay drawn via the FOREGROUND draw-list, so
+            // it may be larger than the chat window itself (screen-space
+            // clipping only at the game window edge). Falls back to nothing
+            // when no texture.
             if (msg.imagePath.Length > 0) {
                 ToolImages::Entry@ img = ToolImages::FindEntry(msg.imagePath);
                 if (img !is null && img.texture !is null) {
-                    float maxW = UI::GetContentRegionAvail().x * 0.70;
+                    float maxW = UI::GetContentRegionAvail().x * 0.35;
                     float scale = maxW / float(img.w);
                     vec2 sz = vec2(float(img.w) * scale, float(img.h) * scale);
                     // Layout: thumbnail starts below the header row.
@@ -1461,11 +1464,15 @@ namespace AgentUI {
                     bool thumbHover = UI::IsItemHovered();
                     if (thumbHover) {
                         UI::SetTooltip("click to expand the full result");
-                        // Large preview overlay centered on the window.
-                        float bigMaxW = UI::GetWindowSize().x - 40;
-                        float bigScale = Math::Min(bigMaxW / float(img.w), 520.0 / float(img.h));
+                        // Large preview centered on the window, allowed to be
+                        // larger than the window (foreground draw-list is
+                        // screen-space; the game clips at the screen edge).
+                        vec2 winSize = UI::GetWindowSize();
+                        float bigMaxW = winSize.x * 1.6;
+                        float bigMaxH = Math::Max(520.0, winSize.y * 1.3);
+                        float bigScale = Math::Min(bigMaxW / float(img.w), bigMaxH / float(img.h));
                         vec2 big = vec2(float(img.w) * bigScale, float(img.h) * bigScale);
-                        vec2 wp = UI::GetWindowPos() + (UI::GetWindowSize() - big) * 0.5;
+                        vec2 wp = UI::GetWindowPos() + (winSize - big) * 0.5;
                         // Draw AFTER the window so it overlays the chat.
                         auto fdl = UI::GetForegroundDrawList();
                         fdl.AddImage(img.texture, wp, big);
