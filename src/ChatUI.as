@@ -80,10 +80,12 @@ namespace AgentUI {
     AgentStatus g_Status;
 
     int g_LastInputTokens = 0;
-int g_LastCachedReadTokens = 0;
-int g_LastCacheWriteTokens = 0;
+    int g_LastCachedReadTokens = 0;
+    int g_LastCacheWriteTokens = 0;
     int g_LastOutputTokens = 0;
     int g_LastTotalTokens = 0;
+    // DEV/driver: one-shot force-open of the Token details header (verification).
+    bool g_ForceTokenDetailsOpen = false;
     int g_RunningOutputTokens = 0;
 
     // Provider-test feedback shown under the Test button in Settings.
@@ -226,6 +228,9 @@ int g_LastCacheWriteTokens = 0;
 
         UI::Dummy(vec2(0, 2));
 
+        bool forceOpen = g_ForceTokenDetailsOpen;
+        g_ForceTokenDetailsOpen = false;
+        if (forceOpen) UI::SetNextItemOpen(true, UI::Cond::Always);
         if (AccentCollapsingHeader("Token details")) {
             vec4 labelCol = vec4(0.45, 0.50, 0.58, 1.0);
             vec4 sepCol = vec4(0.30, 0.33, 0.38, 1.0);

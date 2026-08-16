@@ -285,6 +285,13 @@ namespace AgentDriver {
             resp["ok"] = true;
             return resp;
         }
+        if (op == "open_token_details") {
+            // Verification helper: one-shot force-open of the collapsed
+            // "Token details" header so a capture can see the stat rows.
+            AgentUI::g_ForceTokenDetailsOpen = true;
+            resp["ok"] = true;
+            return resp;
+        }
         if (op == "debug_base64") {
             // Verification: compare plugin base64 encoding against a known-good
             // reference (newline/MIME handling differs by flag).
