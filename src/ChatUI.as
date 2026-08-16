@@ -462,6 +462,17 @@ namespace AgentUI {
         UI::PopStyleColor(22);
     }
 
+    // Route heuristic for the startup suggestion: the map has meaningful
+    // placed content already (any blocks at all reads as "route exists" for
+    // our purposes — an empty map suggests sampling, a built one suggests
+    // scenery around existing work).
+    bool MapHasRoute() {
+        auto app = cast<CGameManiaPlanet>(GetApp());
+        auto editor = app !is null ? cast<CGameCtnEditorFree>(app.Editor) : null;
+        if (editor is null || editor.Challenge is null) return false;
+        return editor.Challenge.Blocks.Length > 8;
+    }
+
     void Render() {
         if (!AgentSettings::S_ShowWindow) return;
 
@@ -483,6 +494,7 @@ namespace AgentUI {
                 DrawContextStats();
                 UI::Separator();
                 DrawMessages();
+                StartupSuggestion::Draw(MapHasRoute());
                 DrawInput();
                 DrawBottomToolbar();
             }
@@ -1839,6 +1851,7 @@ namespace AgentUI {
         ::CancelCurrentRun();
         LlmHistory::ClearHistory();
         g_Messages.RemoveRange(0, g_Messages.Length);
+        StartupSuggestion::g_Dismissed = false;
         g_CurrentTurn = 0;
         g_StepCount = 0;
         g_Status.Set(StatusKind::Idle);

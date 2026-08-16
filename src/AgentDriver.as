@@ -49,6 +49,18 @@ namespace AgentDriver {
             resp["showSettings"] = AgentUI::g_ShowSettings;
             resp["showWindow"] = AgentSettings::S_ShowWindow;
             resp["messageCount"] = int(AgentUI::g_Messages.Length);
+            resp["suggestionVisible"] = StartupSuggestion::ShouldShow();
+            resp["suggestionLabel"] = StartupSuggestion::ButtonLabel(AgentUI::MapHasRoute());
+            return resp;
+        }
+        if (op == "apply_startup_suggestion") {
+            // Simulate the Try button: fill composer, dismiss the row.
+            bool hasRoute = AgentUI::MapHasRoute();
+            AgentUI::g_InputText = StartupSuggestion::ComposerPrompt(hasRoute);
+            StartupSuggestion::g_Dismissed = true;
+            resp["ok"] = true;
+            resp["hasRoute"] = hasRoute;
+            resp["inputLen"] = int(AgentUI::g_InputText.Length);
             return resp;
         }
         if (op == "set_input") {

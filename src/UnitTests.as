@@ -804,6 +804,41 @@ namespace AgentUnitTests {
         AgentUI::g_RunningOutputTokens = snapRunningOut;
     }
 
+    // --- startup suggestion --------------------------------------------------
+
+    void Test_StartupSuggestion_PromptVariants() {
+        // Map-aware variants: empty map vs existing route.
+        string emptyPrompt = StartupSuggestion::ComposerPrompt(false);
+        string routePrompt = StartupSuggestion::ComposerPrompt(true);
+        Assert(emptyPrompt.Length > 100, "empty-map prompt is substantial");
+        Assert(routePrompt.Length > 100, "route prompt is substantial");
+        Assert(emptyPrompt != routePrompt, "variants differ");
+        Assert(emptyPrompt.IndexOf("4") >= 0 && emptyPrompt.IndexOf("8") >= 0, "4-8 sample islands in empty prompt");
+        Assert(emptyPrompt.IndexOf("macroblock") >= 0, "macroblock reuse+create in prompt");
+        Assert(routePrompt.IndexOf("macroblock") >= 0, "macroblock reuse+create in route variant");
+        // Button label is concise.
+        string label = StartupSuggestion::ButtonLabel(false);
+        Assert(label.Length > 0 && label.Length < 40, "label concise");
+        Assert(StartupSuggestion::ButtonLabel(true).Length < 40, "route label concise");
+    }
+
+    void Test_StartupSuggestion_ShouldShow() {
+        // Shows only when history is empty and the agent is idle.
+        bool snapDismissed = StartupSuggestion::g_Dismissed;
+        bool snapBusy = FollowCam::g_AgentBusy;
+        StartupSuggestion::g_Dismissed = false;
+        FollowCam::g_AgentBusy = false;
+        AgentUI::g_Messages.RemoveRange(0, AgentUI::g_Messages.Length);
+        Assert(StartupSuggestion::ShouldShow(), "shows on empty history");
+        AgentUI::g_Messages.InsertLast(AgentUI::Message(AgentUI::MsgType::User, "hello"));
+        Assert(!StartupSuggestion::ShouldShow(), "hidden once history exists");
+        AgentUI::g_Messages.RemoveRange(0, AgentUI::g_Messages.Length);
+        StartupSuggestion::g_Dismissed = true;
+        Assert(!StartupSuggestion::ShouldShow(), "hidden after dismiss");
+        StartupSuggestion::g_Dismissed = snapDismissed;
+        FollowCam::g_AgentBusy = snapBusy;
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -845,6 +880,8 @@ namespace AgentUnitTests {
         RegisterUnitTest("tool focus location result pos extracts", Test_ToolFocus_LocationResultPosExtracts);
         RegisterUnitTest("lifetime stats cached input accumulates", Test_LifetimeStats_CachedInputAccumulates);
         RegisterUnitTest("lifetime stats update token stats feeds cache split", Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit);
+        RegisterUnitTest("startup suggestion prompt variants", Test_StartupSuggestion_PromptVariants);
+        RegisterUnitTest("startup suggestion should show", Test_StartupSuggestion_ShouldShow);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);
