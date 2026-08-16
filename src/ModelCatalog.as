@@ -117,7 +117,7 @@ array<string> EffortChoicesFor(const string &in providerKey) {
         }
         if (choices.Length > 0) return choices;
     }
-    choices = { "none", "minimal", "low", "medium", "high", "xhigh" };
+    choices = { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
     return choices;
 }
 
@@ -145,12 +145,18 @@ void SetCatalog(const string &in catalogId, array<string>@ models) {
 }
 
 // Start a background fetch of the model list for the given provider
-// config. No-op when a fetch is already running for the same id.
+// config. Retries are gated by a config fingerprint (baseUrl + key
+// length): one attempt per distinct config, so a failing endpoint
+// (mid-typed URL, unreachable host) produces one attempt per edit
+// instead of one per UI frame. Editing the base URL or key re-arms it.
 void StartFetchCatalog(const string &in catalogId, bool anthropicShape, const string &in apiKey, const string &in baseUrl) {
     array<string>@ existing = GetCatalog(catalogId);
-    if (existing !is null) return;
-    // Re-fetch when missing only (stale catalogs can be refreshed by
-    // clearing via ClearCatalog).
+    if (existing !is null) return; // success already cached for this session
+    string fingerprint = baseUrl + "\n" + apiKey.Length;
+    string attemptedFingerprint;
+    if (_fetchAttempted.Get(catalogId, attemptedFingerprint)) {
+        if (attemptedFingerprint == fingerprint) return; // tried this exact config already
+    }
     auto req = FetchCatalogRequest();
     req.catalogId = catalogId;
     req.anthropicShape = anthropicShape;
@@ -192,9 +198,9 @@ void FetchCatalogCoro(ref@ requestRef) {
         print("[tm-agent] catalog " + req.catalogId + ": " + models.Length + " models");
     } else {
         // Zero models with or without an error — note the attempt either
-        // way so FetchFailed() can distinguish "not tried yet" from
+        // way so StartFetchCatalog can distinguish "not tried yet" from
         // "tried and listing unsupported/empty".
-        NoteFetchAttempted(req.catalogId);
+        NoteFetchAttempted(req.catalogId, req.baseUrl + "\n" + req.apiKey.Length);
         if (error.Length > 0) {
             print("[tm-agent] catalog " + req.catalogId + " fetch failed: " + error);
         } else {
@@ -206,18 +212,16 @@ void FetchCatalogCoro(ref@ requestRef) {
 
 void ClearCatalog(const string &in catalogId) {
     g_Catalogs.Delete(catalogId);
-}
-
-bool FetchFailed(const string &in catalogId) {
-    // A catalog that stays empty + not fetching after a fetch attempt is
-    // treated as failed; surfaced via tooltip.
-    return GetCatalog(catalogId) is null && g_FetchRunningCount == 0 && _fetchAttempted.Exists(catalogId);
+    _fetchAttempted.Delete(catalogId);
 }
 
 dictionary _fetchAttempted;
 
-void NoteFetchAttempted(const string &in catalogId) {
-    _fetchAttempted.Set(catalogId, true);
+// Record the config fingerprint that was just attempted so
+// StartFetchCatalog can avoid re-trying the same failing config every
+// frame.
+void NoteFetchAttempted(const string &in catalogId, const string &in fingerprint) {
+    _fetchAttempted.Set(catalogId, fingerprint);
 }
 
 }
