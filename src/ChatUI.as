@@ -322,9 +322,14 @@ int g_LastCacheWriteTokens = 0;
         if (ruleX2 > ruleX1 + 10) dl.AddLine(vec2(ruleX1, ruleY), vec2(ruleX2, ruleY), ruleCol, 1);
         UI::Dummy(vec2(0, 2));
 
-        array<string> labels = {"In", "Out", "Msgs", "Turns", "Steps", "Placed", "Removed"};
+        // Lifetime cached input: shown once any cache activity has ever been
+        // recorded; hidden otherwise so cache-less installs keep a tight row.
+        bool lifetimeHasCache = AgentStats::S_TotalCachedReadTokens > 0 || AgentStats::S_TotalCacheWriteTokens > 0;
+        array<string> labels = {"In", "Cached", "Out", "Msgs", "Turns", "Steps", "Placed", "Removed"};
+        if (!lifetimeHasCache) labels.RemoveAt(1);
         array<string> values = {
             FormatTokenCount(AgentStats::S_TotalInputTokens),
+            FormatTokenCount(AgentStats::S_TotalCachedReadTokens + AgentStats::S_TotalCacheWriteTokens),
             FormatTokenCount(AgentStats::S_TotalOutputTokens),
             "" + AgentStats::S_TotalUserMessages,
             "" + AgentStats::S_TotalTurns,
@@ -332,6 +337,7 @@ int g_LastCacheWriteTokens = 0;
             "" + AgentStats::S_TotalBlocksPlaced,
             "" + AgentStats::S_TotalBlocksRemoved
         };
+        if (!lifetimeHasCache) values.RemoveAt(1);
 
         vec2 winPos = UI::GetWindowPos();
         float rightEdge = winPos.x + UI::GetWindowSize().x - 16;
@@ -348,6 +354,13 @@ int g_LastCacheWriteTokens = 0;
                 }
             }
             DrawInlineStat(labels[i], values[i], labelCol);
+            if (lifetimeHasCache && labels[i] == "Cached" && UI::IsItemHovered()) {
+                UI::SetTooltip(
+                    "Lifetime cached input\n"
+                    "cached read: " + FormatTokenCount(AgentStats::S_TotalCachedReadTokens) + " input tokens served from cache (cheap)\n"
+                    "cache write: " + FormatTokenCount(AgentStats::S_TotalCacheWriteTokens) + " input tokens newly written (Anthropic bills 1.25x)"
+                );
+            }
         }
     }
 
@@ -1842,7 +1855,7 @@ int g_LastCacheWriteTokens = 0;
         g_LastCachedReadTokens = cachedReadTokens;
         g_LastCacheWriteTokens = cacheWriteTokens;
         g_RunningOutputTokens += outputTokens;
-        AgentStats::RecordTokens(inputTokens, outputTokens);
+        AgentStats::RecordTokens(inputTokens, outputTokens, cachedReadTokens, cacheWriteTokens);
     }
 
     void RenderMenu() {

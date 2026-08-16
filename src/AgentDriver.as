@@ -336,6 +336,10 @@ namespace AgentDriver {
             resp["total"] = AgentUI::g_LastTotalTokens;
             resp["cachedRead"] = AgentUI::g_LastCachedReadTokens;
             resp["cacheWrite"] = AgentUI::g_LastCacheWriteTokens;
+            resp["lifetimeInput"] = AgentStats::S_TotalInputTokens;
+            resp["lifetimeOutput"] = AgentStats::S_TotalOutputTokens;
+            resp["lifetimeCachedRead"] = AgentStats::S_TotalCachedReadTokens;
+            resp["lifetimeCacheWrite"] = AgentStats::S_TotalCacheWriteTokens;
             return resp;
         }
         if (op == "get_pill_rects") {
