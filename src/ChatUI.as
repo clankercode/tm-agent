@@ -22,7 +22,7 @@ namespace AgentUI {
     // and mis-parsed anymore; callers pass StatusKind::Error + "foo" explicitly.
     enum StatusKind { Idle, Running, CallingLLM, Cancelled, Error }
 
-    class Status {
+    class AgentStatus {
         private StatusKind m_kind = StatusKind::Idle;
         private string m_desc = "";
 
@@ -73,7 +73,7 @@ namespace AgentUI {
         }
     }
 
-    Status g_Status;
+    AgentStatus g_Status;
 
     int g_LastInputTokens = 0;
     int g_LastOutputTokens = 0;
