@@ -10,11 +10,20 @@ void Render() {
     AgentUI::Render();
 }
 
-#if DEV
 void Update(float dt) {
+    FollowCam::Update();
+#if DEV
     AgentDriver::Poll();
-}
 #endif
+}
+
+void OnSettingsLoadFailed() {}
+
+void OnInit() {
+    // Follow-cam mode persists via settings; S_FollowCamMode is loaded by
+    // the time OnInit runs.
+    FollowCam::SetMode(FollowCam::ParseMode(AgentSettings::S_FollowCamMode));
+}
 
 void OnDestroyed() {
     CancelCurrentRun();

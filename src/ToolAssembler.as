@@ -76,6 +76,9 @@ namespace ToolAssembler {
         return toolCalls;
     }
 
+    // Legacy: names that used to trigger the old snap-focus. Retained for
+    // reference; camera-follow is now owned by FollowCam (AgentLoop pings it
+    // for every executed tool call).
     bool IsFocusableTool(const string &in name) {
         return name == "PlaceBlock"
             || name == "RemoveBlock"
@@ -117,9 +120,7 @@ namespace ToolAssembler {
                 err["error"] = "tool " + name + " threw: " + getExceptionInfo();
                 return err;
             }
-            if (IsFocusableTool(name) && result !is null) {
-                CameraFocus::TryFocusFromResult(result, input);
-            }
+            if (result is null) @result = Json::Object();
         }
 
         return result;

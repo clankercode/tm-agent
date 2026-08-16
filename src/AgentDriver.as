@@ -276,6 +276,47 @@ namespace AgentDriver {
             return resp;
         }
 
+        if (op == "set_agent_busy") {
+            // Verification helper: hold the follow-cam busy gate open so
+            // per-frame Update() runs (as it would during a real run).
+            if (!req.HasKey("busy")) { resp["ok"] = false; resp["error"] = "busy (bool) required"; return resp; }
+            FollowCam::SetAgentBusy(bool(req["busy"]));
+            resp["ok"] = true;
+            return resp;
+        }
+        if (op == "set_follow_mode") {
+            if (!req.HasKey("mode")) { resp["ok"] = false; resp["error"] = "mode required (off|steps|swing|cinematic)"; return resp; }
+            FollowCam::FollowMode m = FollowCam::ParseMode(string(req["mode"]));
+            FollowCam::SetMode(m);
+            AgentSettings::S_FollowCamMode = FollowCam::ModeToString(m);
+            resp["ok"] = true;
+            resp["mode"] = FollowCam::ModeToString(FollowCam::g_Mode);
+            return resp;
+        }
+        if (op == "get_follow_state") {
+            resp["ok"] = true;
+            resp["mode"] = FollowCam::ModeToString(FollowCam::g_Mode);
+            resp["agentBusy"] = FollowCam::g_AgentBusy;
+            resp["followCount"] = FollowCam::g_FollowCount;
+            resp["deferredCount"] = FollowCam::g_DeferredCount;
+            resp["lastError"] = FollowCam::g_LastError;
+            return resp;
+        }
+        if (op == "cam_activity_sim") {
+            // Verification helper: pump a synthetic agent activity through
+            // the follow pipeline (same path ProcessToolCallsImpl uses).
+            if (!req.HasKey("tool")) { resp["ok"] = false; resp["error"] = "tool required"; return resp; }
+            Json::Value@ input = req.HasKey("input") ? req["input"] : Json::Object();
+            bool wasBusy = FollowCam::g_AgentBusy;
+            FollowCam::SetAgentBusy(true); // simulate a running agent
+            bool moved = FollowCam::OnAgentActivity(string(req["tool"]), input);
+            FollowCam::SetAgentBusy(wasBusy);
+            resp["ok"] = true;
+            resp["moved"] = moved;
+            resp["followCount"] = FollowCam::g_FollowCount;
+            resp["mode"] = FollowCam::ModeToString(FollowCam::g_Mode);
+            return resp;
+        }
         if (op == "call_tool") {
             // Verification helper: invoke any MCP tool by name through the
             // plugin's own dispatch path (exercises the same code the LLM

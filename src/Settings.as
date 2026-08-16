@@ -55,6 +55,12 @@ namespace AgentSettings {
     [Setting category="UI" name="Show Window"]
     bool S_ShowWindow = true;
 
+    [Setting category="Camera" name="Follow Cam Default Mode" description="off / steps / swing / cinematic — what the follow camera does while the agent works (cyclable in the chat header)"]
+    string S_FollowCamMode = "swing";
+
+    [Setting category="Camera" name="Follow Cam Enabled" description="Show the follow-mode selector in the chat header"]
+    bool S_FollowCamEnabled = true;
+
     // ------------------------------------------------------------------
     // Provider helpers — shared by AgentLoop, LlmHistory, ChatUI, tests.
     // ------------------------------------------------------------------

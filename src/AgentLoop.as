@@ -29,9 +29,18 @@ void SendMessage(const string &in content) {
     }
     LlmHistory::AddUserMessage(content);
     g_State = STATE_AWAITING_LLM;
+    FollowCam::SetAgentBusy(true);
     AgentUI::SetStatus(AgentUI::StatusKind::CallingLLM);
     uint generation = ++g_RunGeneration;
     startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(generation, content));
+}
+
+// Mirror of g_State for FollowCam: busy while a run is in flight. Every
+// terminal path funnels through MarkIdle() so the follow camera always
+// hands control back.
+void MarkIdle() {
+    g_State = STATE_IDLE;
+    FollowCam::SetAgentBusy(false);
 }
 
 // Minimal provider ping used by the "Test Provider" button in Settings.
@@ -145,7 +154,7 @@ void AgentLoopCoroutine(ref@ requestRef) {
             RecordPendingToolFailures("Agent request aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Agent request failed");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Agent request failed unexpectedly.");
-            g_State = STATE_IDLE;
+            MarkIdle();
         }
     }
 }
@@ -165,7 +174,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "History exceeds configured token ceiling");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant,
             "Error: The current complete turn cannot fit within Max History Tokens. Increase the limit or start a new conversation.");
-        g_State = STATE_IDLE;
+        MarkIdle();
         return;
     }
     Json::Value@ messages = LlmHistory::GetMessagesForLlm(tools, editorState);
@@ -184,7 +193,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         SessionLog::LogError("No valid API key/base URL configured");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "No valid API key configured");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: No valid API key/base URL configured. Please check your settings.");
-        g_State = STATE_IDLE;
+        MarkIdle();
         return;
     }
 
@@ -226,7 +235,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         SessionLog::LogError("Provider returned no response");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "Provider returned no response");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Provider returned no response.");
-        g_State = STATE_IDLE;
+        MarkIdle();
         return;
     }
 
@@ -249,7 +258,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         SessionLog::LogError(errorMsg);
         AgentUI::SetStatus(AgentUI::StatusKind::Error, errorMsg);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: " + errorMsg);
-        g_State = STATE_IDLE;
+        MarkIdle();
         return;
     }
 
@@ -288,7 +297,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         LlmHistory::AddAssistantMessage(text, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
-        g_State = STATE_IDLE;
+        MarkIdle();
         AgentUI::SetStatus(AgentUI::StatusKind::Idle);
     }
 }
@@ -307,7 +316,7 @@ void ProcessToolCalls(uint generation) {
             RecordPendingToolFailures("Tool execution aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Tool execution failed");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Tool execution failed unexpectedly.");
-            g_State = STATE_IDLE;
+            MarkIdle();
         }
     }
 }
@@ -463,6 +472,12 @@ void ProcessToolCallsImpl(uint generation) {
         // remove anything after it resumes.
         if (!CommitToolResultIfCurrent(generation, toolCall, actualResult)) return;
 
+        // Follow camera: one ping per executed tool call (sync and async
+        // alike), success or not — it tracks where work happens, not whether
+        // it succeeded. ToolFocus::ExtractFocusPos filters non-positional
+        // tools cheaply.
+        FollowCam::OnAgentActivity(name, toolCall.HasKey("input") ? toolCall["input"] : null);
+
         if (IsToolResultSuccess(actualResult)) {
             if (name == "PlaceBlock") AgentStats::RecordBlockPlaced();
             else if (name == "RemoveBlock") AgentStats::RecordBlockRemoved();
@@ -495,7 +510,7 @@ void CancelCurrentRun() {
     // those calls before clearing the queue so future provider requests never
     // contain dangling call ids.
     RecordPendingToolFailures("Tool run was cancelled");
-    g_State = STATE_IDLE;
+    MarkIdle();
     AgentUI::SetStatus(AgentUI::StatusKind::Cancelled);
 }
 

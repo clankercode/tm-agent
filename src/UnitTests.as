@@ -403,7 +403,62 @@ namespace AgentUnitTests {
 
     // ---- SessionLog (JSONL persistence) ----
 
-    // --- ToolFocus (eye button) ------------------------------------------------
+    // --- FollowCam (agent-follow camera) ---------------------------------------
+
+    void Test_FollowCam_ModeParseAndPersistence() {
+        // Enum <-> string round trips; unknown names map to Off, never throw.
+        Assert(FollowCam::ModeToString(FollowCam::FollowMode::Swing) == "swing", "Swing serializes");
+        Assert(FollowCam::ModeToString(FollowCam::FollowMode::Cinematic) == "cinematic", "Cinematic serializes");
+        Assert(FollowCam::ModeToString(FollowCam::FollowMode::Steps) == "steps", "Steps serializes");
+        Assert(FollowCam::ModeToString(FollowCam::FollowMode::Off) == "off", "Off serializes");
+        Assert(FollowCam::ParseMode("swing") == FollowCam::FollowMode::Swing, "swing parses");
+        Assert(FollowCam::ParseMode("CINEMATIC") == FollowCam::FollowMode::Cinematic, "parse is case-insensitive");
+        Assert(FollowCam::ParseMode("nope") == FollowCam::FollowMode::Off, "unknown -> Off");
+        Assert(FollowCam::ParseMode("") == FollowCam::FollowMode::Off, "empty -> Off");
+    }
+
+    void Test_FollowCam_DeadbandAcceptsOrDefers() {
+        FollowCam::ResetForTest();
+        // First activity primes the goal without a move.
+        FollowCam::OnAgentActivity("PlaceBlock", Json::Parse('{"x":100,"y":10,"z":100}'));
+        Assert(FollowCam::g_FollowCount == 0, "first activity primes goal (no move yet)");
+        Assert(FollowCam::g_PendingTarget !is null && FollowCam::g_PendingTarget.valid, "pending target captured");
+        // Grid coords: x=100 grid = 3200m; second call at x=120 grid = 3840m
+        // -> 640m apart, far beyond the deadband.
+        FollowCam::OnAgentActivity("PlaceBlock", Json::Parse('{"x":120,"y":10,"z":100}'));
+        Assert(FollowCam::g_FollowCount == 1, "activity beyond deadband triggers a follow move");
+        // Non-positional tools never move the camera.
+        FollowCam::OnAgentActivity("GetMapInfo", Json::Object());
+        Assert(FollowCam::g_FollowCount == 1, "non-positional tool does not follow");
+        // Off mode never moves.
+        FollowCam::SetMode(FollowCam::FollowMode::Off);
+        FollowCam::OnAgentActivity("PlaceBlock", Json::Parse('{"x":200,"y":10,"z":200}'));
+        Assert(FollowCam::g_FollowCount == 1, "Off mode does not follow");
+        FollowCam::SetMode(FollowCam::FollowMode::Swing);
+    }
+
+    void Test_FollowCam_SwingAngles() {
+        // Swing keeps h between its bounds; v clamped to a sane down-tilt band.
+        for (uint i = 0; i < 200; i++) {
+            float h = FollowCam::NextSwingH();
+            Assert(h >= FollowCam::SWING_H_MIN && h <= FollowCam::SWING_H_MAX, "swing h within bounds: " + h);
+            float v = FollowCam::NextSwingV();
+            Assert(v >= FollowCam::SWING_V_MIN && v <= FollowCam::SWING_V_MAX, "swing v within bounds: " + v);
+        }
+    }
+
+    void Test_FollowCam_ActivityBusDoorIsOpenWhileAgentWorks() {
+        FollowCam::ResetForTest();
+        // Busy only gates the per-frame Update (camera writes), not activity
+        // intake — ProcessToolCallsImpl pings FollowCam while the run is in
+        // flight by definition.
+        FollowCam::OnAgentActivity("PlaceBlock", Json::Parse('{"x":10,"y":10,"z":10}'));
+        Assert(FollowCam::g_FollowCount == 0, "first activity primes goal");
+        // x=10 -> 320m; x=60 -> 1920m: far beyond deadband.
+        FollowCam::OnAgentActivity("PlaceBlock", Json::Parse('{"x":60,"y":10,"z":60}'));
+        Assert(FollowCam::g_FollowCount == 1, "distant activity while busy still retargets");
+        FollowCam::SetAgentBusy(false);
+    }
 
     void Test_ToolFocus_GridToolsConvertCoords() {
         // Core PlaceBlock: x/y/z are block-grid ints -> meters.
@@ -569,6 +624,10 @@ namespace AgentUnitTests {
         RegisterUnitTest("session log disabled writes nothing", Test_SessionLog_DisabledWritesNothing);
         RegisterUnitTest("session log llm exchange carries usage", Test_SessionLog_LlmExchangeCarriesUsage);
         RegisterUnitTest("tool focus grid tools convert coords", Test_ToolFocus_GridToolsConvertCoords);
+        RegisterUnitTest("follow cam mode parse", Test_FollowCam_ModeParseAndPersistence);
+        RegisterUnitTest("follow cam deadband", Test_FollowCam_DeadbandAcceptsOrDefers);
+        RegisterUnitTest("follow cam swing angles", Test_FollowCam_SwingAngles);
+        RegisterUnitTest("follow cam activity while busy", Test_FollowCam_ActivityBusDoorIsOpenWhileAgentWorks);
         RegisterUnitTest("tool focus world tools pass through", Test_ToolFocus_WorldToolsPassThrough);
         RegisterUnitTest("tool focus non-focusable tools", Test_ToolFocus_NonFocusableTools);
     }

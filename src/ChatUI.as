@@ -804,9 +804,51 @@ namespace AgentUI {
         UI::PopStyleColor();
         UI::PopFont();
 
+        // Second header row: follow-cam selector right-aligned.
+        DrawFollowCamSelector();
+
         UI::Dummy(vec2(0, 3));
         UI::Separator();
         UI::Dummy(vec2(0, 5));
+    }
+
+    // Follow-cam mode pills: [follow: off/steps/swing/cine]. Compact, right
+    // of the status area, highlighted when active. Click cycles.
+    void DrawFollowCamSelector() {
+        if (!AgentSettings::S_FollowCamEnabled) return;
+
+        UI::SameLine();
+        UI::AlignTextToFramePadding();
+
+        FollowCam::FollowMode[] order = {
+            FollowCam::FollowMode::Off,
+            FollowCam::FollowMode::Steps,
+            FollowCam::FollowMode::Swing,
+            FollowCam::FollowMode::Cinematic
+        };
+        string[] labels = { "off", "steps", "swing", "cine" };
+
+        UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
+        UI::Text(Icons::VideoCamera);
+        UI::PopStyleColor();
+
+        for (uint i = 0; i < order.Length; i++) {
+            UI::SameLine(0, 4);
+            bool active = FollowCam::g_Mode == order[i];
+            if (active) {
+                UI::PushStyleColor(UI::Col::Text, vec4(0.00, 0.82, 0.95, 1.0));
+            } else {
+                UI::PushStyleColor(UI::Col::Text, vec4(0.42, 0.46, 0.52, 0.9));
+            }
+            if (UI::Selectable(labels[i] + "##followmode", active)) {
+                FollowCam::SetMode(order[i]);
+                AgentSettings::S_FollowCamMode = FollowCam::ModeToString(order[i]);
+            }
+            UI::PopStyleColor();
+        }
+        if (UI::IsItemHovered()) {
+            UI::SetTooltip("Follow cam — moves the camera to watch the agent while it works");
+        }
     }
 
     void DrawMessages() {
@@ -1090,8 +1132,6 @@ namespace AgentUI {
         UI::Dummy(vec2(availW, rowH));
         bool hovered = UI::IsItemHovered();
         float rowMidY = absY + rowH * 0.5;
-
-        // Eye affordance for tool calls that act on a place in the map
         // (PlaceBlock/PlaceItem/FocusCamera/...): clicking animates the
         // editor camera there. ToolHasFocusTarget is a cheap name check;
         // position parsing only happens on click.
