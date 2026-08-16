@@ -1,6 +1,5 @@
-// StartupSuggestion.as — map-aware "try this" row above the composer when the
-// chat is fresh (empty history, idle). Fills the composer with a starter
-// prompt; the user reviews and sends — nothing auto-runs.
+// StartupSuggestion.as — map-aware TRY-list starter. Fills the composer
+// with a scenery-sampler prompt; the user reviews and sends.
 
 namespace StartupSuggestion {
 
@@ -15,11 +14,11 @@ namespace StartupSuggestion {
         return true;
     }
 
-    // Concise try-button label, adapted to what the map already has.
+    // Featured TRY-list label. Icon lives here so the chip can draw it.
     string ButtonLabel(bool mapHasRoute) {
         return mapHasRoute
-            ? Icons::Magic + " Scenery around your route"
-            : Icons::Magic + " Scenery sampler";
+            ? Icons::Magic + " Scenery: design & place around your route"
+            : Icons::Magic + " Scenery: design & place sample islands";
     }
 
     // The long-form starter prompt dropped into the composer.

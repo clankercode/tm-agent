@@ -1095,11 +1095,13 @@ namespace AgentUI {
         DrawExampleLine(accent, "Place a start block at the cursor.");
         DrawExampleLine(accent, "Search the inventory for 'dirt'.");
         DrawExampleLine(accent, "Extend this into a classic Trackmania 01-style track.");
-        string sceneryLabel = MapHasRoute()
-            ? "Sample scenery around the existing route."
-            : "Sample 4–8 scenery islands on this map.";
-        DrawExampleLine(accent, sceneryLabel, StartupSuggestion::ComposerPrompt(MapHasRoute()));
         DrawExampleLine(accent, "Check all checkpoints for double respawnability.");
+
+        // Featured last: icon + stronger chrome so it reads as the "real" starter.
+        UI::Dummy(vec2(0, 6));
+        bool hasRoute = MapHasRoute();
+        DrawFeaturedExample(accent, StartupSuggestion::ButtonLabel(hasRoute),
+            StartupSuggestion::ComposerPrompt(hasRoute));
         UI::Unindent(14);
 
         vec2 cardEnd = UI::GetCursorPos();
@@ -1117,6 +1119,26 @@ namespace AgentUI {
             g_InputText = fill.Length > 0 ? fill : example;
         }
         UI::PopStyleColor(4);
+    }
+
+    // Last TRY row: Magic icon + label inside a tinted chip so it stands
+    // apart from the plain AngleRight examples above.
+    void DrawFeaturedExample(const vec4 &in accent, const string &in label, const string &in fill) {
+        float rowH = UI::GetFrameHeight() + 4;
+        float availW = UI::GetContentRegionAvail().x;
+        UI::Dummy(vec2(availW, rowH));
+        bool hover = UI::IsItemHovered();
+        bool clicked = hover && UI::IsMouseClicked(UI::MouseButton::Left);
+        vec4 r = UI::GetItemRect();
+        auto dl = UI::GetWindowDrawList();
+        float fillA = hover ? 0.22 : 0.12;
+        float borderA = hover ? 0.80 : 0.45;
+        dl.AddRectFilled(r, vec4(accent.x, accent.y, accent.z, fillA), 5);
+        dl.AddRect(r, vec4(accent.x, accent.y, accent.z, borderA), 5);
+        vec4 textCol = hover ? vec4(0.92, 0.98, 1.00, 1.0) : vec4(0.70, 0.94, 1.00, 1.0);
+        vec2 tsz = UI::MeasureString(label);
+        dl.AddText(vec2(r.x + 10, r.y + (r.w - tsz.y) * 0.5), textCol, label);
+        if (clicked && fill.Length > 0) g_InputText = fill;
     }
 
     void DrawBubble(const string &in label, const vec4 &in accent, const string &in body, bool markdown = false) {
