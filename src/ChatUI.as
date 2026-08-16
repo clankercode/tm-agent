@@ -1089,7 +1089,41 @@ namespace AgentUI {
         // report native interaction state afterwards.
         UI::Dummy(vec2(availW, rowH));
         bool hovered = UI::IsItemHovered();
-        if (hovered && UI::IsMouseClicked(UI::MouseButton::Left)) {
+        float rowMidY = absY + rowH * 0.5;
+
+        // Eye affordance for tool calls that act on a place in the map
+        // (PlaceBlock/PlaceItem/FocusCamera/...): clicking animates the
+        // editor camera there. ToolHasFocusTarget is a cheap name check;
+        // position parsing only happens on click.
+        bool eyeClicked = false;
+        bool hasEye = msg.type == MsgType::ToolCall && ToolFocus::ToolHasFocusTarget(msg.toolName);
+        vec4 eyeRect = vec4(0);
+        if (hasEye) {
+            vec2 eyeSize = UI::MeasureString(Icons::Eye);
+            eyeRect = vec4(
+                absX + availW - eyeSize.x - 14,
+                rowMidY - (eyeSize.y + 4) * 0.5,
+                eyeSize.x + 10,
+                eyeSize.y + 4
+            );
+            vec2 mouse = UI::GetMousePos();
+            bool eyeHover = mouse.x >= eyeRect.x && mouse.x <= eyeRect.x + eyeRect.z
+                && mouse.y >= eyeRect.y && mouse.y <= eyeRect.y + eyeRect.w;
+            if (eyeHover) {
+                dl.AddRectFilled(eyeRect, vec4(accent.x, accent.y, accent.z, 0.16), 3);
+                if (UI::IsMouseClicked(UI::MouseButton::Left)) eyeClicked = true;
+            }
+            dl.AddText(vec2(eyeRect.x + 5, eyeRect.y + 2), eyeHover ? vec4(accent.x, accent.y, accent.z, 1.0) : vec4(0.55, 0.60, 0.68, 0.9), Icons::Eye);
+        }
+
+        if (eyeClicked) {
+            string focusErr = ToolFocus::FocusOnToolCall(msg.toolName, msg.content);
+            if (focusErr.Length > 0) {
+                // Log-before-UI, same as every other chat mutation.
+                SessionLog::WriteRecord("system", "view: " + focusErr);
+                AddMessage(MsgType::System, "view: " + focusErr);
+            }
+        } else if (hovered && UI::IsMouseClicked(UI::MouseButton::Left)) {
             msg.expanded = !msg.expanded;
             msg.InvalidateLayout();
         }
@@ -1099,7 +1133,7 @@ namespace AgentUI {
         dl.AddRectFilled(vec4(absX, absY, availW, rowH), bg, 3);
         // Left accent bar ties the row into the bubble family.
         dl.AddRectFilled(vec4(absX, absY, 2, rowH), accent, 1);
-        float midY = absY + rowH * 0.5;
+        float midY = rowMidY;
 
         // The label starts with a status glyph (→ / ✓ / ✗) followed by
         // whitespace and optional tool name. Split the label so the

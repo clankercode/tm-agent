@@ -403,6 +403,54 @@ namespace AgentUnitTests {
 
     // ---- SessionLog (JSONL persistence) ----
 
+    // --- ToolFocus (eye button) ------------------------------------------------
+
+    void Test_ToolFocus_GridToolsConvertCoords() {
+        // Core PlaceBlock: x/y/z are block-grid ints -> meters.
+        Json::Value@ input = Json::Parse('{"blockName":"RoadTechStraight","x":24,"y":12,"z":16}');
+        ToolFocus::FocusPos@ fp = ToolFocus::ExtractFocusPos("PlaceBlock", input);
+        Assert(fp !is null && fp.valid, "PlaceBlock with x/y/z should be focusable");
+        Assert(!fp.worldCoords, "PlaceBlock input is grid coords");
+        // Grid 24,12,16 -> world 768, 32, 512 (E++ CoordToPos: x*32, (y-8)*8, z*32)
+        Assert(Math::Abs(fp.pos.x - 768.0) < 0.01, "grid x 24 -> 768m, got " + fp.pos.x);
+        Assert(Math::Abs(fp.pos.y - 32.0) < 0.01, "grid y 12 -> 32m, got " + fp.pos.y);
+        Assert(Math::Abs(fp.pos.z - 512.0) < 0.01, "grid z 16 -> 512m, got " + fp.pos.z);
+
+        // Namespaced pack tool: SAME local name as core but takes world meters
+        // (E++ free-block placement). Assert the meters convention.
+        ToolFocus::FocusPos@ fp2 = ToolFocus::ExtractFocusPos("tm-mcp-pack-epp.PlaceBlock", Json::Parse('{"blockName":"RoadTechStraight","x":1,"y":9,"z":2}'));
+        Assert(fp2 !is null && fp2.valid && fp2.worldCoords, "namespaced pack PlaceBlock should be focusable as world coords");
+        Assert(Math::Abs(fp2.pos.y - 9.0) < 0.001, "pack PlaceBlock y 9 stays 9m (meters convention), got " + fp2.pos.y);
+
+        // pos:[x,y,z] array form carries the tool's own convention.
+        ToolFocus::FocusPos@ fp3 = ToolFocus::ExtractFocusPos("PlaceBlock", Json::Parse('{"pos":[24,12,16]}'));
+        Assert(fp3 !is null && fp3.valid && Math::Abs(fp3.pos.z - 512.0) < 0.01, "core PlaceBlock pos[] array should convert as grid coords");
+        ToolFocus::FocusPos@ fp4 = ToolFocus::ExtractFocusPos("tm-mcp-pack-epp.PlaceItem", Json::Parse('{"pos":[10,20,30]}'));
+        Assert(fp4 !is null && fp4.valid && fp4.worldCoords && Math::Abs(fp4.pos.y - 20.0) < 0.001, "pack PlaceItem pos[] array should pass through as meters");
+    }
+
+    void Test_ToolFocus_WorldToolsPassThrough() {
+        // Pack PlaceItem / FocusCamera: x/y/z are world meters already.
+        Json::Value@ input = Json::Parse('{"itemPath":"Stadium/Circuit/Items/Torch.Item.gbx","x":100.5,"y":24.0,"z":-32.0}');
+        ToolFocus::FocusPos@ fp = ToolFocus::ExtractFocusPos("PlaceItem", input);
+        Assert(fp !is null && fp.valid, "PlaceItem with x/y/z should be focusable");
+        Assert(fp.worldCoords, "PlaceItem input is world coords");
+        Assert(Math::Abs(fp.pos.x - 100.5) < 0.001 && Math::Abs(fp.pos.z + 32.0) < 0.001, "world coords pass through unchanged");
+
+        ToolFocus::FocusPos@ fp2 = ToolFocus::ExtractFocusPos("tm-mcp-pack-epp.FocusCamera", Json::Parse('{"x":10,"y":20,"z":30}'));
+        Assert(fp2 !is null && fp2.valid && fp2.worldCoords, "pack FocusCamera should be focusable as world coords");
+        Assert(Math::Abs(fp2.pos.y - 20.0) < 0.001, "FocusCamera y passes through");
+    }
+
+    void Test_ToolFocus_NonFocusableTools() {
+        // No position semantics -> no eye button.
+        Assert(ToolFocus::ExtractFocusPos("GetMapInfo", Json::Object()) is null, "GetMapInfo is not focusable");
+        Assert(ToolFocus::ExtractFocusPos("Undo", Json::Object()) is null, "Undo is not focusable");
+        // PlaceBlock-shaped name but no coordinates -> nothing concrete to see.
+        Assert(ToolFocus::ExtractFocusPos("PlaceBlock", Json::Parse('{"blockName":"RoadTechStraight"}')) is null,
+            "PlaceBlock without x/y/z is not focusable");
+    }
+
     void Test_SessionLog_WritesJsonlRecords() {
         SessionLog::ResetForTest();
         SessionLog::LogUserMessage("hello");
@@ -520,6 +568,9 @@ namespace AgentUnitTests {
         RegisterUnitTest("session log rotates on new session", Test_SessionLog_RotatesOnNewSession);
         RegisterUnitTest("session log disabled writes nothing", Test_SessionLog_DisabledWritesNothing);
         RegisterUnitTest("session log llm exchange carries usage", Test_SessionLog_LlmExchangeCarriesUsage);
+        RegisterUnitTest("tool focus grid tools convert coords", Test_ToolFocus_GridToolsConvertCoords);
+        RegisterUnitTest("tool focus world tools pass through", Test_ToolFocus_WorldToolsPassThrough);
+        RegisterUnitTest("tool focus non-focusable tools", Test_ToolFocus_NonFocusableTools);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);

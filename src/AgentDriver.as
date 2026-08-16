@@ -1,6 +1,8 @@
 namespace AgentDriver {
     uint g_LastPollAt = 0;
     const uint POLL_INTERVAL_MS = 250;
+    // Handle of the most recent async call_tool dispatch (see poll_async).
+    string g_AsyncHandle = "";
 
     string CmdPath() { return IO::FromStorageFolder("driver_cmd.json"); }
     string RespPath() { return IO::FromStorageFolder("driver_resp.json"); }
@@ -171,7 +173,11 @@ namespace AgentDriver {
             else if (t == AgentUI::MsgType::ToolCall) SessionLog::LogToolCall(injectedTool, text);
             else if (t == AgentUI::MsgType::ToolResult) SessionLog::LogToolResult(injectedTool, text);
             else SessionLog::WriteRecord("system", text);
-            AgentUI::AddMessage(t, text);
+            // Tool roles must go through AddToolCall/AddToolResult so
+            // msg.toolName is set (chips render it; the eye button needs it).
+            if (t == AgentUI::MsgType::ToolCall) AgentUI::AddToolCall(injectedTool, text);
+            else if (t == AgentUI::MsgType::ToolResult) AgentUI::AddToolResult(injectedTool, text);
+            else AgentUI::AddMessage(t, text);
             resp["ok"] = true;
             return resp;
         }
@@ -270,6 +276,72 @@ namespace AgentDriver {
             return resp;
         }
 
+        if (op == "call_tool") {
+            // Verification helper: invoke any MCP tool by name through the
+            // plugin's own dispatch path (exercises the same code the LLM
+            // loop uses). Suspending tools (e.g. TakeScreenshot) can't run
+            // here (Poll runs in the render context — no suspension), so
+            // async:true dispatches and returns a handle; poll it with the
+            // poll_async op.
+            if (!req.HasKey("tool")) { resp["ok"] = false; resp["error"] = "tool required"; return resp; }
+            Json::Value input = req.HasKey("input") ? req["input"] : Json::Object();
+            resp["ok"] = true;
+            if (req.HasKey("async") && bool(req["async"])) {
+                Json::Value@ h = TmMcp::DispatchAsync(string(req["tool"]), input);
+                if (h is null || !h.HasKey("request_id")) {
+                    resp["error"] = "dispatch failed";
+                    if (h !is null && h.HasKey("error")) resp["detail"] = string(h["error"]);
+                    return resp;
+                }
+                g_AsyncHandle = string(h["request_id"]);
+                resp["request_id"] = g_AsyncHandle;
+                return resp;
+            }
+            resp["result"] = TmMcp::CallTool(string(req["tool"]), input);
+            return resp;
+        }
+        if (op == "poll_async") {
+            // Poll the handle from the last async call_tool. Returns the
+            // GetResult payload ({status: pending|done|error, result?}).
+            if (g_AsyncHandle.Length == 0) { resp["ok"] = false; resp["error"] = "no async handle"; return resp; }
+            Json::Value h = Json::Object();
+            h["request_id"] = g_AsyncHandle;
+            resp["ok"] = true;
+            resp["result"] = TmMcp::CallTool("GetResult", h);
+            return resp;
+        }
+        if (op == "get_cam") {
+            // Verification helper: current editor camera target via the MCP
+            // surface (works regardless of which camera tool moved it).
+            resp["ok"] = true;
+            Json::Value empty = Json::Object();
+            Json::Value@ cam = TmMcp::CallTool("GetEditorCamera", empty);
+            if (cam !is null && cam.HasKey("success") && bool(cam["success"])) {
+                resp["cam"] = cam;
+            } else {
+                resp["ok"] = false;
+                resp["error"] = cam is null ? "GetEditorCamera returned null" : Json::Write(cam);
+            }
+            return resp;
+        }
+        if (op == "focus_click") {
+            // Verification helper: simulate the eye-button click on the most
+            // recent tool call that has a focusable position. Returns the
+            // focus result so the driver can assert camera movement.
+            resp["ok"] = true;
+            for (int i = int(AgentUI::g_Messages.Length) - 1; i >= 0; i--) {
+                auto m = AgentUI::g_Messages[i];
+                if (m.type == AgentUI::MsgType::ToolCall && ToolFocus::ToolHasFocusTarget(m.toolName)) {
+                    string err = ToolFocus::FocusOnToolCall(m.toolName, m.content);
+                    resp["tool"] = m.toolName;
+                    resp["error"] = err;
+                    resp["focusCount"] = ToolFocus::g_FocusCount;
+                    return resp;
+                }
+            }
+            resp["error"] = "no focusable tool call in history";
+            return resp;
+        }
         if (op == "set_scroll_sim") {
             // Crash-repro harness: simulate a scroll position to force cull
             // conditions in DrawMessages without real input. -1 = real.

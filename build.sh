@@ -28,6 +28,7 @@ plugin_slug() {
 local_dependency_root() {
   case "$1" in
     TmMcp|tm-control-mcp) echo "../tm-control-mcp" ;;
+    TmMcpPackEpp|tm-mcp-pack-epp) echo "../tm-mcp-pack-epp" ;;
     AiApi|ai-api) echo "../tm-aiapi" ;;
     *) return 1 ;;
   esac
@@ -109,7 +110,14 @@ stage_local_dependencies() {
   local dep root dep_slug
   for dep in $(local_dependencies); do
     if root="$(local_dependency_root "$dep")" && [[ -d "$root" ]]; then
+      # Slug override: some repos stage under their folder name, which can
+      # differ from what plugin_slug() derives from the manifest name (e.g.
+      # "TM MCP Pack E++" -> tm-mcp-pack-e, but the pack registers and is
+      # depended on as tm-mcp-pack-epp).
       dep_slug="$(plugin_slug "$root")"
+      case "$dep" in
+        tm-mcp-pack-epp) dep_slug="tm-mcp-pack-epp" ;;
+      esac
       # Dependencies have their own repos and LSP gates; several (tm-control-mcp)
       # flood false positives under this harness. Only the primary plugin is
       # LSP-checked here; in-game load is the ground-truth gate for deps.
