@@ -52,9 +52,7 @@ namespace FollowCam {
     // don't retarget (avoids hop-spam while the agent works one area).
     const float DEADBAND_METERS = 96.0;
 
-    // Swing-mode bounds (radians). Phase orbit stays inside these.
-    const float SWING_H_MIN = -0.9;
-    const float SWING_H_MAX = 0.9;
+    // Swing-mode orbit shape (radians). Phase orbit stays inside these.
     const float SWING_V_MIN = 0.25;
     const float SWING_V_MAX = 0.75;
     const float SWING_H_AMP = 0.85;

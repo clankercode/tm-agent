@@ -460,7 +460,8 @@ namespace AgentUnitTests {
         // (impulse reverse). Smooth orbit must ease through extrema:
         // frame-to-frame change in dh stays small.
         FollowCam::ResetForTest();
-        FollowCam::g_CurrentH = FollowCam::SWING_H_MAX - 0.01;
+        // Seed near where the old ping-pong wall used to be.
+        FollowCam::g_CurrentH = 0.89;
         FollowCam::SeedOrbitFromCurrent();
         float prev = FollowCam::NextSwingH();
         float prevDh = 0.0;
