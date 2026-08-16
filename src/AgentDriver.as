@@ -163,6 +163,14 @@ namespace AgentDriver {
             else if (role == "tool_result") t = AgentUI::MsgType::ToolResult;
             else if (role == "system") t = AgentUI::MsgType::System;
             else { resp["ok"] = false; resp["error"] = "unknown role"; return resp; }
+            // Driver-injected messages are part of the session too (demo
+            // seeding, tests): log before the UI mutation.
+            string injectedTool = req.HasKey("tool") ? string(req["tool"]) : "";
+            if (t == AgentUI::MsgType::User) SessionLog::LogUserMessage(text);
+            else if (t == AgentUI::MsgType::Assistant) SessionLog::LogAssistantMessage(text);
+            else if (t == AgentUI::MsgType::ToolCall) SessionLog::LogToolCall(injectedTool, text);
+            else if (t == AgentUI::MsgType::ToolResult) SessionLog::LogToolResult(injectedTool, text);
+            else SessionLog::WriteRecord("system", text);
             AgentUI::AddMessage(t, text);
             resp["ok"] = true;
             return resp;
@@ -180,13 +188,21 @@ namespace AgentDriver {
         }
         if (op == "seed_demo") {
             AgentUI::ClearMessages();
+            SessionLog::LogUserMessage("What blocks are on the current map?");
             AgentUI::AddMessage(AgentUI::MsgType::User, "What blocks are on the current map?");
+            SessionLog::LogToolCall("GetMapBlocks", "{\"detail\":\"summary\"}");
             AgentUI::AddToolCall("GetMapBlocks", "{\"detail\":\"summary\"}");
+            SessionLog::LogToolResult("GetMapBlocks", "{\"total\":247,\"top\":[{\"name\":\"RoadTechStraight\",\"count\":84},{\"name\":\"RoadDirtStraight\",\"count\":36},{\"name\":\"RoadBumpStraight\",\"count\":22}]}");
             AgentUI::AddToolResult("GetMapBlocks", "{\"total\":247,\"top\":[{\"name\":\"RoadTechStraight\",\"count\":84},{\"name\":\"RoadDirtStraight\",\"count\":36},{\"name\":\"RoadBumpStraight\",\"count\":22}]}");
+            SessionLog::LogAssistantMessage("The map has 247 blocks total. Most common:\n\n- RoadTechStraight x84\n- RoadDirtStraight x36\n- RoadBumpStraight x22\n\nWant me to list a specific type or region?");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "The map has 247 blocks total. Most common:\n\n- RoadTechStraight x84\n- RoadDirtStraight x36\n- RoadBumpStraight x22\n\nWant me to list a specific type or region?");
+            SessionLog::LogUserMessage("Place a start block at the cursor.");
             AgentUI::AddMessage(AgentUI::MsgType::User, "Place a start block at the cursor.");
+            SessionLog::LogToolCall("PlaceBlock", "{\"block\":\"RoadTechStart\",\"pos\":[24,12,16],\"rot\":\"North\"}");
             AgentUI::AddToolCall("PlaceBlock", "{\"block\":\"RoadTechStart\",\"pos\":[24,12,16],\"rot\":\"North\"}");
+            SessionLog::LogToolResult("PlaceBlock", "{\"ok\":true,\"placedAt\":[24,12,16]}");
             AgentUI::AddToolResult("PlaceBlock", "{\"ok\":true,\"placedAt\":[24,12,16]}");
+            SessionLog::LogAssistantMessage("Done. Placed RoadTechStart at (24, 12, 16) facing North.");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Done. Placed RoadTechStart at (24, 12, 16) facing North.");
             resp["ok"] = true;
             return resp;
@@ -222,11 +238,11 @@ namespace AgentDriver {
                 string role = string(e["role"]);
                 string content = e.HasKey("content") ? string(e["content"]) : "";
                 string toolName = e.HasKey("tool") ? string(e["tool"]) : "";
-                if (role == "tool_call") AgentUI::AddToolCall(toolName, content);
-                else if (role == "tool_result") AgentUI::AddToolResult(toolName, content);
-                else if (role == "assistant" || role == "agent") AgentUI::AddMessage(AgentUI::MsgType::Assistant, content);
-                else if (role == "system") AgentUI::AddMessage(AgentUI::MsgType::System, content);
-                else AgentUI::AddMessage(AgentUI::MsgType::User, content);
+                if (role == "tool_call") { SessionLog::LogToolCall(toolName, content); AgentUI::AddToolCall(toolName, content); }
+                else if (role == "tool_result") { SessionLog::LogToolResult(toolName, content); AgentUI::AddToolResult(toolName, content); }
+                else if (role == "assistant" || role == "agent") { SessionLog::LogAssistantMessage(content); AgentUI::AddMessage(AgentUI::MsgType::Assistant, content); }
+                else if (role == "system") { SessionLog::WriteRecord("system", content); AgentUI::AddMessage(AgentUI::MsgType::System, content); }
+                else { SessionLog::LogUserMessage(content); AgentUI::AddMessage(AgentUI::MsgType::User, content); }
             }
             resp["ok"] = true;
             return resp;

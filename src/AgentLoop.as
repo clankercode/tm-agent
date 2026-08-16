@@ -141,6 +141,7 @@ void AgentLoopCoroutine(ref@ requestRef) {
         if (request !is null && request.generation == g_RunGeneration) {
             string error = getExceptionInfo();
             print("[tm-agent] agent loop exception: " + error);
+            SessionLog::LogError("agent loop exception: " + error);
             RecordPendingToolFailures("Agent request aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Agent request failed");
             AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Agent request failed unexpectedly.");
@@ -160,6 +161,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     string editorState = LlmHistory::BoundEditorStateForBudget(
         tools, AgentSettings::S_MaxHistoryTokens, ToolAssembler::GetEditorStateSnapshot());
     if (!LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens, editorState)) {
+        SessionLog::LogError("History exceeds configured token ceiling");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "History exceeds configured token ceiling");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant,
             "Error: The current complete turn cannot fit within Max History Tokens. Increase the limit or start a new conversation.");
@@ -179,6 +181,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         missingConfig = AgentSettings::S_CustomAnthropicBaseUrl.Length == 0;
     }
     if (missingConfig) {
+        SessionLog::LogError("No valid API key/base URL configured");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "No valid API key configured");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: No valid API key/base URL configured. Please check your settings.");
         g_State = STATE_IDLE;
@@ -220,15 +223,16 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     if (request.generation != g_RunGeneration) return;
 
     if (resp is null) {
+        SessionLog::LogError("Provider returned no response");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "Provider returned no response");
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Provider returned no response.");
         g_State = STATE_IDLE;
         return;
     }
 
+    string respDumpFull = Json::Write(resp);
     {
-        string respDump = Json::Write(resp);
-        if (respDump.Length > 1200) respDump = respDump.SubStr(0, 1200) + "…";
+        string respDump = respDumpFull.Length > 1200 ? respDumpFull.SubStr(0, 1200) + "…" : respDumpFull;
         print("[tm-agent] LLM resp: " + respDump);
     }
 
@@ -242,28 +246,35 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         } else {
             errorMsg = Json::Write(errNode);
         }
+        SessionLog::LogError(errorMsg);
         AgentUI::SetStatus(AgentUI::StatusKind::Error, errorMsg);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: " + errorMsg);
         g_State = STATE_IDLE;
         return;
     }
 
+    int lastIn = 0;
+    int lastOut = 0;
+    int lastTot = 0;
     if (resp.HasKey("usage") && resp["usage"].GetType() == Json::Type::Object) {
         Json::Value@ usage = resp["usage"];
-        int inToks = usage.HasKey("input_tokens") ? int(usage["input_tokens"]) : 0;
-        int outToks = usage.HasKey("output_tokens") ? int(usage["output_tokens"]) : 0;
-        int totToks = usage.HasKey("total_tokens") ? int(usage["total_tokens"]) : 0;
-        AgentUI::UpdateTokenStats(inToks, outToks, totToks);
+        lastIn = usage.HasKey("input_tokens") ? int(usage["input_tokens"]) : 0;
+        lastOut = usage.HasKey("output_tokens") ? int(usage["output_tokens"]) : 0;
+        lastTot = usage.HasKey("total_tokens") ? int(usage["total_tokens"]) : 0;
+        AgentUI::UpdateTokenStats(lastIn, lastOut, lastTot);
     }
 
     string text = "";
     if (resp.HasKey("text") && resp["text"].GetType() != Json::Type::Null) {
         text = string(resp["text"]);
     }
-
     auto parsedToolCalls = ToolAssembler::ParseToolCalls(resp);
     if (parsedToolCalls.Length > 0) {
         Json::Value@ reasoningItems = resp.HasKey("reasoning_items") ? resp["reasoning_items"] : null;
+        // Log-before-UI: persist the exchange and the assistant turn before
+        // any history/UI state mutates, so a crash cannot lose the response.
+        SessionLog::LogLlmExchange(lastIn, lastOut, lastTot, respDumpFull);
+        SessionLog::LogAssistantMessage(text);
         LlmHistory::AddAssistantToolCalls(text, parsedToolCalls, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
@@ -272,6 +283,8 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         ProcessToolCalls(request.generation);
     } else {
         Json::Value@ reasoningItems = resp.HasKey("reasoning_items") ? resp["reasoning_items"] : null;
+        SessionLog::LogLlmExchange(lastIn, lastOut, lastTot, respDumpFull);
+        SessionLog::LogAssistantMessage(text);
         LlmHistory::AddAssistantMessage(text, reasoningItems);
         AgentUI::AddMessage(AgentUI::MsgType::Assistant, text);
         AgentUI::IncrementStep();
@@ -287,6 +300,7 @@ void ProcessToolCalls(uint generation) {
         if (generation == g_RunGeneration) {
             string error = getExceptionInfo();
             print("[tm-agent] tool execution exception: " + error);
+            SessionLog::LogError("tool execution exception: " + error);
             // The assistant tool-call message is already durable history at
             // this point. Close every remaining call before returning so both
             // Responses and Anthropic histories remain structurally valid.
@@ -314,6 +328,9 @@ void RecordToolResult(Json::Value@ toolCall, Json::Value@ actualResult) {
     string name = SafeToolCallString(toolCall, "name", "invalid_tool_call");
     string toolCallId = SafeToolCallString(toolCall, "id", "invalid_call");
     string resultJson = Json::Write(actualResult);
+    // Log-before-UI: the durable record is written before the UI chip and
+    // provider history are updated.
+    SessionLog::LogToolResult(name, resultJson);
     AgentUI::AddToolResult(name, resultJson);
     LlmHistory::AddToolResult(toolCallId, name, resultJson);
 }
@@ -351,6 +368,8 @@ Json::Value@ ExecutePendingToolCall(Json::Value@ toolCall, uint generation) {
     }
 
     Json::Value@ input = toolCall["input"];
+    // Log-before-UI: the outgoing call is logged before the UI chip renders.
+    SessionLog::LogToolCall(name, Json::Write(input));
     AgentUI::AddToolCall(name, Json::Write(input));
 
     Json::Value@ result;

@@ -401,6 +401,104 @@ namespace AgentUnitTests {
         ProcessToolCallsImpl(request.generation);
     }
 
+    // ---- SessionLog (JSONL persistence) ----
+
+    void Test_SessionLog_WritesJsonlRecords() {
+        SessionLog::ResetForTest();
+        SessionLog::LogUserMessage("hello");
+        SessionLog::LogToolCall("GetMapInfo", "{}");
+        SessionLog::LogToolResult("GetMapInfo", "{\"ok\":true}");
+        SessionLog::LogAssistantMessage("done");
+
+        string raw = SessionLog::ReadSessionFileForTest();
+        Assert(raw.Length > 0, "session file should exist and be non-empty");
+        // WriteLine appends '\n' per record: 5 records = 5 lines (+trailing).
+        array<string> lines = raw.Split("\n");
+        uint nonEmpty = 0;
+        for (uint i = 0; i < lines.Length; i++) {
+            if (lines[i].Length > 0) nonEmpty++;
+        }
+        Assert(nonEmpty == 5, "expected 5 records (meta + 4), got " + nonEmpty);
+
+        // Every line must be a standalone JSON object with v/ts/type.
+        array<string> expectedTypes = {"session_meta", "user", "tool_call", "tool_result", "assistant"};
+        uint ix = 0;
+        for (uint i = 0; i < lines.Length; i++) {
+            if (lines[i].Length == 0) continue;
+            Json::Value@ rec = Json::Parse(lines[i]);
+            Assert(rec !is null && rec.GetType() == Json::Type::Object,
+                "record " + ix + " should be a JSON object");
+            Assert(rec.HasKey("v") && rec.HasKey("ts") && rec.HasKey("type"),
+                "record " + ix + " should carry v/ts/type fields");
+            Assert(string(rec["type"]) == expectedTypes[ix],
+                "record " + ix + " type should be " + expectedTypes[ix] + ", got " + string(rec["type"]));
+            ix++;
+        }
+        Assert(SessionLog::RecordCount() == 5, "record counter should be 5, got " + SessionLog::RecordCount());
+    }
+
+    void Test_SessionLog_ToolRecordsCarryToolName() {
+        SessionLog::ResetForTest();
+        SessionLog::LogToolCall("PlaceBlock", "{\"block\":\"Grass\"}");
+        string raw = SessionLog::ReadSessionFileForTest();
+        array<string> lines = raw.Split("\n");
+        for (uint i = 0; i < lines.Length; i++) {
+            if (lines[i].Length == 0) continue;
+            Json::Value@ rec = Json::Parse(lines[i]);
+            if (string(rec["type"]) == "tool_call") {
+                Assert(string(rec["tool"]) == "PlaceBlock", "tool_call record should carry tool name");
+                Assert(string(rec["content"]) == "{\"block\":\"Grass\"}", "tool_call record should carry input JSON");
+                return;
+            }
+        }
+        throw("no tool_call record found in session log");
+    }
+
+    void Test_SessionLog_RotatesOnNewSession() {
+        SessionLog::ResetForTest();
+        SessionLog::LogUserMessage("first session");
+        string pathA = SessionLog::Path();
+        Assert(pathA.Length > 0, "first session should have a path");
+
+        SessionLog::StartNewSession();
+        string pathB = SessionLog::Path();
+        Assert(pathB != pathA, "rotation should produce a different file path (got duplicate " + pathB + ")");
+        Assert(SessionLog::RecordCount() == 0, "record counter should reset on rotation");
+
+        SessionLog::LogAssistantMessage("second session");
+        Assert(SessionLog::RecordCount() == 2, "new session should start with meta + 1 record, got " + SessionLog::RecordCount()); // meta + assistant
+        Assert(SessionLog::ReadSessionFileForTest().Contains("second session"),
+            "new writes should land in the rotated file");
+        Assert(!SessionLog::ReadSessionFileForTest().Contains("first session"),
+            "rotated file must not contain the old conversation");
+    }
+
+    void Test_SessionLog_DisabledWritesNothing() {
+        SessionLog::ResetForTest();
+        SessionLog::SetEnabled(false);
+        SessionLog::LogUserMessage("should not persist");
+        Assert(SessionLog::RecordCount() == 0, "disabled logger should not count records");
+        SessionLog::SetEnabled(true);
+    }
+
+    void Test_SessionLog_LlmExchangeCarriesUsage() {
+        SessionLog::ResetForTest();
+        SessionLog::LogLlmExchange(100, 7, 107, "{\"text\":\"hi\"}");
+        string raw = SessionLog::ReadSessionFileForTest();
+        array<string> lines = raw.Split("\n");
+        for (uint i = 0; i < lines.Length; i++) {
+            if (lines[i].Length == 0) continue;
+            Json::Value@ rec = Json::Parse(lines[i]);
+            if (string(rec["type"]) != "llm_exchange") continue;
+            Assert(rec.HasKey("usage"), "llm_exchange should carry usage");
+            Assert(int(rec["usage"]["input_tokens"]) == 100, "usage.input_tokens should round-trip");
+            Assert(int(rec["usage"]["total_tokens"]) == 107, "usage.total_tokens should round-trip");
+            Assert(string(rec["raw_response"]) == "{\"text\":\"hi\"}", "raw_response should round-trip");
+            return;
+        }
+        throw("no llm_exchange record found");
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -417,6 +515,11 @@ namespace AgentUnitTests {
         RegisterUnitTest("compaction enforces outbound ceiling", Test_Compaction_EnforcesActualOutboundCeiling);
         RegisterUnitTest("cancelled workers cannot record orphan results", Test_CancelledWorker_CannotRecordOrphanResult);
         RegisterUnitTest("cancellation survives an actual poll suspension", Test_CancelDuringActualPollSuspension);
+        RegisterUnitTest("session log writes jsonl records", Test_SessionLog_WritesJsonlRecords);
+        RegisterUnitTest("session log tool records carry tool name", Test_SessionLog_ToolRecordsCarryToolName);
+        RegisterUnitTest("session log rotates on new session", Test_SessionLog_RotatesOnNewSession);
+        RegisterUnitTest("session log disabled writes nothing", Test_SessionLog_DisabledWritesNothing);
+        RegisterUnitTest("session log llm exchange carries usage", Test_SessionLog_LlmExchangeCarriesUsage);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);

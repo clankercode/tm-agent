@@ -6,6 +6,10 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Added
+
+- JSONL session persistence: every user/assistant message, tool call/result, LLM exchange (usage + raw response), and error is appended to `PluginStorage/tm-agent/sessions/session-<timestamp>.jsonl`. Sessions rotate on New/clear; records are written before the UI updates so a crash cannot lose what the agent sent or received.
+
 ### Fixed
 
 - Crash when scrolling the chat history up: the virtual-scroll cull path advanced the cursor with a bare `SetCursorPos`, tripping ImGui's `ErrorCheckUsingSetCursorPosToExtendParentBoundaries` assertion at `EndChild` whenever the newest messages were off-screen. The cull advance now submits a `Dummy` sized to the cached row height (ChatUI.as `DrawMessages`).

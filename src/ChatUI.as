@@ -1548,6 +1548,9 @@ namespace AgentUI {
     bool SendMessage(const string &in text) {
         if (::g_State != STATE_IDLE) return false;
 
+        // Log-before-UI: the user turn is persisted before the bubble or
+        // any history state exists, so a crash can't lose the prompt.
+        SessionLog::LogUserMessage(text);
         AddMessage(MsgType::User, text);
         g_CurrentTurn++;
         g_StepCount = 1;
@@ -1603,6 +1606,9 @@ namespace AgentUI {
         g_LastOutputTokens = 0;
         g_LastTotalTokens = 0;
         g_RunningOutputTokens = 0;
+        // Rotate the on-disk session: the cleared conversation's transcript
+        // stays browsable, and the next message starts a fresh file.
+        SessionLog::StartNewSession();
     }
 
     void UpdateTokenStats(int inputTokens, int outputTokens, int totalTokens) {
