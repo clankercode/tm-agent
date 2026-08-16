@@ -63,6 +63,55 @@ namespace AgentDriver {
             resp["inputLen"] = int(AgentUI::g_InputText.Length);
             return resp;
         }
+        if (op == "list_interactive") {
+            resp["ok"] = true;
+            resp["cards"] = Interactive::CardsToJson();
+            return resp;
+        }
+        if (op == "toggle_survey") {
+            if (!req.HasKey("id") || !req.HasKey("index")) { resp["ok"] = false; resp["error"] = "id+index required"; return resp; }
+            Interactive::Card@ card = Interactive::Find(string(req["id"]));
+            if (card is null || card.survey is null) { resp["ok"] = false; resp["error"] = "survey not found"; return resp; }
+            Interactive::ToggleOption(card.survey, uint(int(req["index"])));
+            resp["ok"] = true;
+            resp["answer"] = Interactive::FormatSurveyAnswer(card.survey);
+            return resp;
+        }
+        if (op == "submit_survey") {
+            if (!req.HasKey("id")) { resp["ok"] = false; resp["error"] = "id required"; return resp; }
+            Interactive::Card@ card = Interactive::Find(string(req["id"]));
+            if (card is null || card.survey is null) { resp["ok"] = false; resp["error"] = "survey not found"; return resp; }
+            AgentUI::SubmitSurvey(card.survey);
+            resp["ok"] = true;
+            resp["answered"] = card.survey.answered;
+            return resp;
+        }
+        if (op == "click_action") {
+            if (!req.HasKey("id") || !req.HasKey("group")) { resp["ok"] = false; resp["error"] = "id+group required"; return resp; }
+            Interactive::Card@ card = Interactive::Find(string(req["id"]));
+            if (card is null) { resp["ok"] = false; resp["error"] = "card not found"; return resp; }
+            int gi = int(req["group"]);
+            if (gi < 0 || uint(gi) >= card.groups.Length) { resp["ok"] = false; resp["error"] = "bad group"; return resp; }
+            auto g = card.groups[uint(gi)];
+            string act = req.HasKey("action") ? string(req["action"]) : "view";
+            if (act == "view" && g.hasView) {
+                ToolFocus::FocusOnPos(g.viewPos);
+                ToolFocus::MoveCursorToWorld(g.viewPos);
+                resp["ok"] = true;
+                resp["did"] = "view";
+                return resp;
+            }
+            if (act == "continue" && g.continuePrompt.Length > 0) {
+                if (::g_State == STATE_IDLE) AgentUI::SendMessage(g.continuePrompt);
+                else AgentUI::g_InputText = g.continuePrompt;
+                resp["ok"] = true;
+                resp["did"] = "continue";
+                return resp;
+            }
+            resp["ok"] = false;
+            resp["error"] = "action unavailable";
+            return resp;
+        }
         if (op == "set_input") {
             if (!req.HasKey("text")) { resp["ok"] = false; resp["error"] = "text required"; return resp; }
             AgentUI::g_InputText = string(req["text"]);

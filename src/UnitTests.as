@@ -839,6 +839,77 @@ namespace AgentUnitTests {
         FollowCam::g_AgentBusy = snapBusy;
     }
 
+    // --- interactive surveys + action cards --------------------------------
+
+    void Test_Interactive_AskUserParsesAndToggles() {
+        Interactive::ResetForTests();
+        Json::Value@ input = Json::Parse('{"question":"Which island?","options":["A","B","C"],"multiSelect":false}');
+        Interactive::Card@ card = Interactive::OfferSurvey(input);
+        Assert(card !is null, "survey card created");
+        Assert(card.kind == "survey", "kind survey");
+        Assert(card.survey !is null, "survey present");
+        Assert(card.survey.question == "Which island?", "question");
+        Assert(card.survey.options.Length == 3, "3 options");
+        Assert(!card.survey.multiSelect, "single select");
+        Assert(card.survey.allowFreeText, "free text default on");
+        Assert(!card.survey.answered, "not answered yet");
+
+        Interactive::ToggleOption(card.survey, 1);
+        Assert(card.survey.selected[1], "B selected");
+        Interactive::ToggleOption(card.survey, 0);
+        Assert(card.survey.selected[0], "A selected");
+        Assert(!card.survey.selected[1], "B cleared (single-select)");
+
+        string ans = Interactive::FormatSurveyAnswer(card.survey);
+        Assert(ans.IndexOf("A") >= 0, "answer mentions A");
+        Assert(ans.IndexOf("B") < 0, "answer does not mention B");
+    }
+
+    void Test_Interactive_MultiSelectAndSubmit() {
+        Interactive::ResetForTests();
+        Json::Value@ input = Json::Parse('{"question":"Pick styles","options":["forest","cliffs","zen"],"multiSelect":true}');
+        Interactive::Card@ card = Interactive::OfferSurvey(input);
+        Interactive::ToggleOption(card.survey, 0);
+        Interactive::ToggleOption(card.survey, 2);
+        Assert(card.survey.selected[0] && card.survey.selected[2], "forest+zen");
+        Interactive::ToggleOption(card.survey, 0);
+        Assert(!card.survey.selected[0] && card.survey.selected[2], "forest toggled off");
+        string ans = Interactive::FormatSurveyAnswer(card.survey);
+        Assert(ans.IndexOf("zen") >= 0, "zen in answer");
+        Assert(ans.IndexOf("forest") < 0, "forest not in answer");
+        Interactive::MarkAnswered(card.survey, ans);
+        Assert(card.survey.answered, "marked answered");
+    }
+
+    void Test_Interactive_FreeTextAlwaysValid() {
+        Interactive::ResetForTests();
+        Json::Value@ input = Json::Parse('{"question":"Anything?","options":["yes","no"]}');
+        Interactive::Card@ card = Interactive::OfferSurvey(input);
+        Interactive::OnUserFreeText("I'll describe it in words instead");
+        Assert(card.survey.answered, "free text answers the open survey");
+        Assert(card.survey.answerText.IndexOf("describe") >= 0, "free text stored");
+    }
+
+    void Test_Interactive_LargeSetWantsPopOut() {
+        Interactive::ResetForTests();
+        Json::Value@ small = Json::Parse('{"question":"q","options":["1","2","3"]}');
+        Json::Value@ large = Json::Parse('{"question":"q","options":["1","2","3","4","5","6","7"]}');
+        Assert(!Interactive::WantsPopOut(Interactive::OfferSurvey(small).survey), "3 options stay in-chat");
+        Assert(Interactive::WantsPopOut(Interactive::OfferSurvey(large).survey), "7 options offer pop-out");
+    }
+
+    void Test_Interactive_OfferActionsParses() {
+        Interactive::ResetForTests();
+        Json::Value@ input = Json::Parse('{"title":"Islands","groups":[{"id":"a","label":"Island A","view":{"x":10,"y":8,"z":20},"continuePrompt":"Continue scenery on island A"},{"id":"b","label":"Island B","view":{"x":1,"y":2,"z":3},"continuePrompt":"Iterate island B"}]}');
+        Interactive::Card@ card = Interactive::OfferActions(input);
+        Assert(card !is null && card.kind == "actions", "actions card");
+        Assert(card.groups.Length == 2, "2 groups");
+        Assert(card.groups[0].label == "Island A", "group label");
+        Assert(card.groups[0].hasView, "has view");
+        Assert(Math::Abs(card.groups[0].viewPos.x - 10.0) < 0.01, "view x");
+        Assert(card.groups[0].continuePrompt.IndexOf("island A") >= 0, "continue prompt");
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -882,6 +953,11 @@ namespace AgentUnitTests {
         RegisterUnitTest("lifetime stats update token stats feeds cache split", Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit);
         RegisterUnitTest("startup suggestion prompt variants", Test_StartupSuggestion_PromptVariants);
         RegisterUnitTest("startup suggestion should show", Test_StartupSuggestion_ShouldShow);
+        RegisterUnitTest("interactive askuser parses and toggles", Test_Interactive_AskUserParsesAndToggles);
+        RegisterUnitTest("interactive multi-select and submit", Test_Interactive_MultiSelectAndSubmit);
+        RegisterUnitTest("interactive free text always valid", Test_Interactive_FreeTextAlwaysValid);
+        RegisterUnitTest("interactive large set wants pop-out", Test_Interactive_LargeSetWantsPopOut);
+        RegisterUnitTest("interactive offer actions parses", Test_Interactive_OfferActionsParses);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);

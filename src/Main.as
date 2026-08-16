@@ -1,5 +1,5 @@
 void Main() {
-    // No-op; render callbacks are hooked directly below.
+    AgentPack::Register();
 }
 
 void RenderMenu() {
@@ -20,12 +20,16 @@ void Update(float dt) {
 void OnSettingsLoadFailed() {}
 
 void OnInit() {
-    // Follow-cam mode persists via settings; S_FollowCamMode is loaded by
-    // the time OnInit runs.
     FollowCam::SetMode(FollowCam::ParseMode(AgentSettings::S_FollowCamMode));
+    AgentPack::Register();
+}
+
+void OnEnabled() {
+    AgentPack::Register();
 }
 
 void OnDestroyed() {
+    AgentPack::Unregister();
     CancelCurrentRun();
 }
 

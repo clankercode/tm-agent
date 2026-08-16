@@ -93,7 +93,7 @@ namespace AgentUI {
     vec4 g_TestColor = vec4(0.48, 0.52, 0.58, 1.0);
     bool g_TestRunning = false;
 
-    enum MsgType { User, Assistant, ToolCall, ToolResult, System, Error }
+    enum MsgType { User, Assistant, ToolCall, ToolResult, System, Error, Interactive }
 
     class Message {
         MsgType type;
@@ -102,6 +102,7 @@ namespace AgentUI {
         string toolResult;
         bool expanded;
         string imagePath;   // screenshot shown inside a ToolResult chip
+        string interactiveId; // Interactive::Card id for survey/action cards
 
         // Layout cache — filled on first draw, invalidated when width or
         // expanded state changes. Used by the virtual-scroll cull path.
@@ -494,7 +495,6 @@ namespace AgentUI {
                 DrawContextStats();
                 UI::Separator();
                 DrawMessages();
-                StartupSuggestion::Draw(MapHasRoute());
                 DrawInput();
                 DrawBottomToolbar();
             }
@@ -511,6 +511,8 @@ namespace AgentUI {
             }
         }
         UI::End();
+
+        DrawInteractivePopouts();
 
         PopTheme();
 
@@ -1093,6 +1095,11 @@ namespace AgentUI {
         DrawExampleLine(accent, "Place a start block at the cursor.");
         DrawExampleLine(accent, "Search the inventory for 'dirt'.");
         DrawExampleLine(accent, "Extend this into a classic Trackmania 01-style track.");
+        string sceneryLabel = MapHasRoute()
+            ? "Sample scenery around the existing route."
+            : "Sample 4–8 scenery islands on this map.";
+        DrawExampleLine(accent, sceneryLabel, StartupSuggestion::ComposerPrompt(MapHasRoute()));
+        DrawExampleLine(accent, "Check all checkpoints for double respawnability.");
         UI::Unindent(14);
 
         vec2 cardEnd = UI::GetCursorPos();
@@ -1100,14 +1107,14 @@ namespace AgentUI {
         dl.AddRectFilled(vec4(cardX + 2, cardY, 3, cardH - 4), accent, 1);
     }
 
-    void DrawExampleLine(const vec4 &in accent, const string &in example) {
+    void DrawExampleLine(const vec4 &in accent, const string &in example, const string &in fill = "") {
         UI::PushStyleColor(UI::Col::Header, vec4(accent.x, accent.y, accent.z, 0.10));
         UI::PushStyleColor(UI::Col::HeaderHovered, vec4(accent.x, accent.y, accent.z, 0.18));
         UI::PushStyleColor(UI::Col::HeaderActive, vec4(accent.x, accent.y, accent.z, 0.28));
         UI::PushStyleColor(UI::Col::Text, vec4(0.78, 0.82, 0.88, 1.0));
         string label = "  " + Icons::AngleRight + "  " + example + "##ex-" + example;
         if (UI::Selectable(label, false)) {
-            g_InputText = example;
+            g_InputText = fill.Length > 0 ? fill : example;
         }
         UI::PopStyleColor(4);
     }
@@ -1193,6 +1200,112 @@ namespace AgentUI {
         } else if (msg.type == MsgType::System) {
             DrawColoredText(vec4(0.50, 0.54, 0.60, 1.0), msg.content);
             DrawSpacing();
+        } else if (msg.type == MsgType::Interactive) {
+            DrawInteractiveCard(msg);
+        }
+    }
+
+    void SubmitSurvey(Interactive::Survey@ s) {
+        if (s is null || s.answered) return;
+        string ans = Interactive::FormatSurveyAnswer(s);
+        if (ans.Length == 0) return;
+        Interactive::MarkAnswered(s, ans);
+        SendMessage(ans);
+    }
+
+    void DrawSurveyBody(Interactive::Survey@ s, const string &in idSuffix) {
+        vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
+        UI::TextWrapped(s.question);
+        UI::Dummy(vec2(0, 4));
+        if (s.answered) {
+            UI::TextDisabled("Answered: " + s.answerText);
+            return;
+        }
+        for (uint i = 0; i < s.options.Length; i++) {
+            string mark = s.selected[i] ? Icons::CheckSquare : Icons::SquareO;
+            if (!s.multiSelect) mark = s.selected[i] ? Icons::DotCircleO : Icons::CircleO;
+            string lab = mark + "  " + s.options[i] + "##opt-" + idSuffix + "-" + i;
+            if (UI::Selectable(lab, s.selected[i])) {
+                Interactive::ToggleOption(s, i);
+            }
+        }
+        UI::Dummy(vec2(0, 4));
+        if (UI::Button("Submit##sub-" + idSuffix)) {
+            SubmitSurvey(s);
+        }
+        if (Interactive::WantsPopOut(s)) {
+            UI::SameLine();
+            if (UI::Button((s.popOutOpen ? "Dock" : "Pop out") + "##pop-" + idSuffix)) {
+                s.popOutOpen = !s.popOutOpen;
+            }
+        }
+        UI::SameLine();
+        UI::TextDisabled(s.allowFreeText ? "or type a reply below" : "");
+    }
+
+    bool SmallButton(const string &in label, const string &in tooltip = "") {
+        UI::PushStyleVar(UI::StyleVar::FramePadding, vec2(2, 0));
+        bool ret = UI::Button(label);
+        UI::PopStyleVar();
+        if (tooltip.Length > 0 && UI::IsItemHovered()) UI::SetTooltip(tooltip);
+        return ret;
+    }
+
+    void DrawActionGroups(Interactive::Card@ card) {
+        vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
+        if (card.actionsTitle.Length > 0) UI::TextWrapped(card.actionsTitle);
+        for (uint i = 0; i < card.groups.Length; i++) {
+            auto g = card.groups[i];
+            UI::PushID("ag-" + card.id + "-" + i);
+            UI::AlignTextToFramePadding();
+            UI::Text(g.label);
+            UI::SameLine();
+            if (g.hasView) {
+                if (SmallButton(Icons::Eye + " view##v", "Look at this group")) {
+                    ToolFocus::FocusOnPos(g.viewPos);
+                    ToolFocus::MoveCursorToWorld(g.viewPos);
+                }
+                UI::SameLine();
+            }
+            if (g.continuePrompt.Length > 0) {
+                if (SmallButton("continue##c", g.continuePrompt)) {
+                    if (::g_State == STATE_IDLE) {
+                        SendMessage(g.continuePrompt);
+                    } else {
+                        g_InputText = g.continuePrompt;
+                    }
+                }
+            }
+            UI::PopID();
+        }
+    }
+
+    void DrawInteractiveCard(Message@ msg) {
+        Interactive::Card@ card = Interactive::Find(msg.interactiveId);
+        if (card is null) {
+            DrawColoredText(vec4(0.50, 0.54, 0.60, 1.0), msg.content);
+            DrawSpacing();
+            return;
+        }
+        vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
+        UI::Dummy(vec2(0, 4));
+        if (card.kind == "survey" && card.survey !is null) {
+            DrawSurveyBody(card.survey, card.id);
+        } else {
+            DrawActionGroups(card);
+        }
+        DrawSpacing();
+    }
+
+    void DrawInteractivePopouts() {
+        for (uint i = 0; i < Interactive::g_Cards.Length; i++) {
+            auto card = Interactive::g_Cards[i];
+            if (card.kind != "survey" || card.survey is null || !card.survey.popOutOpen) continue;
+            UI::SetNextWindowSize(420, 360, UI::Cond::FirstUseEver);
+            if (UI::Begin(Icons::QuestionCircle + "  " + card.survey.question, card.survey.popOutOpen)) {
+                DrawSurveyBody(card.survey, card.id + "-pop");
+            }
+            UI::End();
         }
     }
 
@@ -1791,6 +1904,7 @@ namespace AgentUI {
         // Log-before-UI: the user turn is persisted before the bubble or
         // any history state exists, so a crash can't lose the prompt.
         SessionLog::LogUserMessage(text);
+        Interactive::OnUserFreeText(text);
         AddMessage(MsgType::User, text);
         g_CurrentTurn++;
         g_StepCount = 1;
@@ -1809,6 +1923,13 @@ namespace AgentUI {
         AgentStats::RecordStep();
     }
 
+
+    void AddInteractive(const string &in id, const string &in title) {
+        auto msg = Message(MsgType::Interactive, title);
+        msg.interactiveId = id;
+        g_Messages.InsertLast(msg);
+        g_PendingScrollBottom = true;
+    }
 
     void AddMessage(MsgType t, const string &in content) {
         g_Messages.InsertLast(Message(t, content));

@@ -41,6 +41,8 @@ namespace StartupSuggestion {
             + " first), and CREATE new custom macroblocks for repeated creative elements"
             + " instead of placing the same blocks one by one everywhere. Use combinations"
             + " creatively - overlap, mirror, and mix macroblocks for richer results.\n"
+            + "After the samples, call tm-agent.OfferActions with one group per island "
+            + "(view position + continuePrompt) so I can look at or continue a group with a click.\n"
             + "Start with step 1 now; keep each island under ~25 blocks so the samples"
             + " stay quick.";
     }
