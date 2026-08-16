@@ -12,8 +12,9 @@
 //                same primitive as the eye button, paced by a deadband so
 //                nearby work doesn't spam hops.
 //   swing      — smooth per-frame follow: position eases toward the target
-//                while the camera orbits (h sweeps within bounds, v eases to
-//                a gentle down-tilt band). Never fully static.
+//                while the camera orbits on a sine (H) + slower sine (V)
+//                so reversals ease through zero velocity; height/angle
+//                wander instead of parking. Never fully static.
 //   cinematic  — like swing but lazier constants, wider orbit, and slight
 //                distance breathing; made for watching from afar.
 //
@@ -51,17 +52,23 @@ namespace FollowCam {
     // don't retarget (avoids hop-spam while the agent works one area).
     const float DEADBAND_METERS = 96.0;
 
-    // Swing-mode bounds (radians).
+    // Swing-mode bounds (radians). Phase orbit stays inside these.
     const float SWING_H_MIN = -0.9;
     const float SWING_H_MAX = 0.9;
     const float SWING_V_MIN = 0.25;
     const float SWING_V_MAX = 0.75;
+    const float SWING_H_AMP = 0.85;
+    const float SWING_V_CENTER = 0.50;
+    const float SWING_V_AMP = 0.18;
+    const float SWING_PHASE_RATE = 0.22;      // rad/s (~28s full H cycle)
+    const float CINE_PHASE_RATE  = 0.10;
+    const float SWING_V_PHASE_K  = 0.63;      // incommensurate so the path doesn't close
+    const float SWING_V_PHASE_OFF = 1.1;
+    const float SWING_PHASE_WRAP = 628.31854; // 100 * 2*pi; 100 H = 63 V cycles
 
     // Per-frame smoothing constants.
     const float SWING_LERP = 4.0;        // target-position ease (per second)
     const float CINE_LERP  = 1.6;
-    const float SWING_H_RATE = 0.35;     // rad/s orbit sweep
-    const float CINE_H_RATE  = 0.12;
     const float SWING_DIST = 140.0;
     const float CINE_DIST  = 260.0;
 
@@ -72,7 +79,15 @@ namespace FollowCam {
     float g_CurrentH = 0.4;
     float g_CurrentV = 0.45;
     float g_CurrentDist = SWING_DIST;
-    float g_HDirection = 1.0;
+    float g_OrbitPhase = 0.0;
+    float g_OrbitBaseH = 0.0;
+
+    // Start the orbit on the current heading so enabling swing doesn't
+    // yank yaw toward 0. Phase 0 => H = base (sin 0); velocity follows cos.
+    void SeedOrbitFromCurrent() {
+        g_OrbitBaseH = g_CurrentH;
+        g_OrbitPhase = 0.0;
+    }
 
     // ------------------------------------------------------------------
     // Mode plumbing
@@ -105,6 +120,7 @@ namespace FollowCam {
         // starts from where the user's camera actually is.
         if (m == FollowMode::Swing || m == FollowMode::Cinematic) {
             ReadEngineCamera();
+            SeedOrbitFromCurrent();
         }
     }
 
@@ -178,7 +194,10 @@ namespace FollowCam {
         // jump the instant a run starts.
         if (g_PendingTarget is null || !g_PendingTarget.valid) {
             SetPendingTarget(target);
-            if (g_Mode != FollowMode::Steps) ReadEngineCamera();
+            if (g_Mode != FollowMode::Steps) {
+                ReadEngineCamera();
+                SeedOrbitFromCurrent();
+            }
             g_DeferredCount++;
             return false;
         }
@@ -225,22 +244,23 @@ namespace FollowCam {
     // Per-frame update (smooth modes)
     // ------------------------------------------------------------------
 
-    // Test-visible angle generators (deterministic bounds; runtime uses the
-    // same functions).
+    // Test-visible angle generators. Phase advances monotonically; H/V are
+    // sines of that phase so velocity goes to zero at extrema (no snap reverse)
+    // and V wanders instead of parking at the midpoint.
+    float PhaseRate() {
+        return g_Mode == FollowMode::Cinematic ? CINE_PHASE_RATE : SWING_PHASE_RATE;
+    }
+
     float NextSwingH() {
-        // Sweep h back and forth within bounds rather than wrapping, so the
-        // motion reads as "camera operator" instead of a carousel.
-        g_CurrentH += g_HDirection * SWING_H_RATE * FrameDt();
-        if (g_CurrentH > SWING_H_MAX) { g_CurrentH = SWING_H_MAX; g_HDirection = -1.0; }
-        if (g_CurrentH < SWING_H_MIN) { g_CurrentH = SWING_H_MIN; g_HDirection = 1.0; }
+        g_OrbitPhase += PhaseRate() * FrameDt();
+        if (g_OrbitPhase > SWING_PHASE_WRAP) g_OrbitPhase -= SWING_PHASE_WRAP;
+        g_CurrentH = g_OrbitBaseH + SWING_H_AMP * Math::Sin(g_OrbitPhase);
         return g_CurrentH;
     }
 
     float NextSwingV() {
-        float goal = (SWING_V_MIN + SWING_V_MAX) * 0.5;
-        g_CurrentV = Math::Lerp(g_CurrentV, goal, Math::Min(1.0, FrameDt() * 0.8));
-        // Clamp in-band regardless of where the camera started, so the
-        // visible motion never dips below a sane down-tilt.
+        float pv = g_OrbitPhase * SWING_V_PHASE_K + SWING_V_PHASE_OFF;
+        g_CurrentV = SWING_V_CENTER + SWING_V_AMP * Math::Sin(pv);
         g_CurrentV = Math::Clamp(g_CurrentV, SWING_V_MIN, SWING_V_MAX);
         return g_CurrentV;
     }
@@ -295,7 +315,8 @@ namespace FollowCam {
         g_Mode = FollowMode::Swing;
         g_CurrentH = 0.4;
         g_CurrentV = 0.45;
-        g_HDirection = 1.0;
+        g_OrbitPhase = 0.0;
+        SeedOrbitFromCurrent();
     }
 #endif
 }

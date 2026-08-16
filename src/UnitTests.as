@@ -445,12 +445,60 @@ namespace AgentUnitTests {
 
     void Test_FollowCam_SwingAngles() {
         // Swing keeps h between its bounds; v clamped to a sane down-tilt band.
+        FollowCam::ResetForTest();
+        float baseH = FollowCam::g_CurrentH;
         for (uint i = 0; i < 200; i++) {
             float h = FollowCam::NextSwingH();
-            Assert(h >= FollowCam::SWING_H_MIN && h <= FollowCam::SWING_H_MAX, "swing h within bounds: " + h);
+            Assert(Math::Abs(h - baseH) <= FollowCam::SWING_H_AMP + 0.001, "swing h stays within amp of seed: " + h);
             float v = FollowCam::NextSwingV();
             Assert(v >= FollowCam::SWING_V_MIN && v <= FollowCam::SWING_V_MAX, "swing v within bounds: " + v);
         }
+    }
+
+    void Test_FollowCam_SwingHDoesNotSnapDirection() {
+        // Ping-pong at the wall used to flip g_HDirection in one frame
+        // (impulse reverse). Smooth orbit must ease through extrema:
+        // frame-to-frame change in dh stays small.
+        FollowCam::ResetForTest();
+        FollowCam::g_CurrentH = FollowCam::SWING_H_MAX - 0.01;
+        FollowCam::SeedOrbitFromCurrent();
+        float prev = FollowCam::NextSwingH();
+        float prevDh = 0.0;
+        float maxJerk = 0.0;
+        for (uint i = 0; i < 400; i++) {
+            float h = FollowCam::NextSwingH();
+            float dh = h - prev;
+            if (i > 0) {
+                float jerk = Math::Abs(dh - prevDh);
+                if (jerk > maxJerk) maxJerk = jerk;
+            }
+            prev = h;
+            prevDh = dh;
+        }
+        Assert(maxJerk < 0.003, "swing h jerk too high (impulse reverse): " + maxJerk);
+    }
+
+    void Test_FollowCam_SwingVWanders() {
+        // V should change height/angle over a cycle, not sit at the midpoint.
+        FollowCam::ResetForTest();
+        FollowCam::SeedOrbitFromCurrent();
+        float vmin = 99.0;
+        float vmax = -99.0;
+        for (uint i = 0; i < 800; i++) {
+            FollowCam::NextSwingH();
+            float v = FollowCam::NextSwingV();
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+        }
+        Assert(vmax - vmin > 0.08, "swing v should wander, span=" + (vmax - vmin));
+    }
+
+    void Test_FollowCam_SwingSeedKeepsHeading() {
+        FollowCam::ResetForTest();
+        FollowCam::g_CurrentH = 2.4;
+        FollowCam::SeedOrbitFromCurrent();
+        float h0 = FollowCam::NextSwingH();
+        Assert(Math::Abs(h0 - 2.4) < 0.02, "first swing step stays near seeded heading, got " + h0);
     }
 
     void Test_FollowCam_ActivityBusDoorIsOpenWhileAgentWorks() {
@@ -816,10 +864,12 @@ namespace AgentUnitTests {
         Assert(emptyPrompt.IndexOf("4") >= 0 && emptyPrompt.IndexOf("8") >= 0, "4-8 sample islands in empty prompt");
         Assert(emptyPrompt.IndexOf("macroblock") >= 0, "macroblock reuse+create in prompt");
         Assert(routePrompt.IndexOf("macroblock") >= 0, "macroblock reuse+create in route variant");
-        // Button label is concise.
         string label = StartupSuggestion::ButtonLabel(false);
-        Assert(label.Length > 0 && label.Length < 40, "label concise");
-        Assert(StartupSuggestion::ButtonLabel(true).Length < 40, "route label concise");
+        Assert(label.IndexOf("Scenery:") >= 0 && label.IndexOf("design") >= 0, "featured label names the job");
+        Assert(label.Length > 0 && label.Length < 80, "label still a single line");
+        string routeLabel = StartupSuggestion::ButtonLabel(true);
+        Assert(routeLabel != label, "route vs empty labels differ");
+        Assert(routeLabel.IndexOf("route") >= 0, "route label mentions route");
     }
 
     void Test_StartupSuggestion_ShouldShow() {
@@ -935,6 +985,9 @@ namespace AgentUnitTests {
         RegisterUnitTest("follow cam mode parse", Test_FollowCam_ModeParseAndPersistence);
         RegisterUnitTest("follow cam deadband", Test_FollowCam_DeadbandAcceptsOrDefers);
         RegisterUnitTest("follow cam swing angles", Test_FollowCam_SwingAngles);
+        RegisterUnitTest("follow cam swing h does not snap", Test_FollowCam_SwingHDoesNotSnapDirection);
+        RegisterUnitTest("follow cam swing v wanders", Test_FollowCam_SwingVWanders);
+        RegisterUnitTest("follow cam swing seed keeps heading", Test_FollowCam_SwingSeedKeepsHeading);
         RegisterUnitTest("follow cam activity while busy", Test_FollowCam_ActivityBusDoorIsOpenWhileAgentWorks);
         RegisterUnitTest("tool focus world tools pass through", Test_ToolFocus_WorldToolsPassThrough);
         RegisterUnitTest("tool focus non-focusable tools", Test_ToolFocus_NonFocusableTools);
