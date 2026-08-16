@@ -80,10 +80,12 @@ namespace AgentUI {
     AgentStatus g_Status;
 
     int g_LastInputTokens = 0;
-int g_LastCachedReadTokens = 0;
-int g_LastCacheWriteTokens = 0;
+    int g_LastCachedReadTokens = 0;
+    int g_LastCacheWriteTokens = 0;
     int g_LastOutputTokens = 0;
     int g_LastTotalTokens = 0;
+    // DEV/driver: one-shot force-open of the Token details header (verification).
+    bool g_ForceTokenDetailsOpen = false;
     int g_RunningOutputTokens = 0;
 
     // Provider-test feedback shown under the Test button in Settings.
@@ -226,6 +228,9 @@ int g_LastCacheWriteTokens = 0;
 
         UI::Dummy(vec2(0, 2));
 
+        bool forceOpen = g_ForceTokenDetailsOpen;
+        g_ForceTokenDetailsOpen = false;
+        if (forceOpen) UI::SetNextItemOpen(true, UI::Cond::Always);
         if (AccentCollapsingHeader("Token details")) {
             vec4 labelCol = vec4(0.45, 0.50, 0.58, 1.0);
             vec4 sepCol = vec4(0.30, 0.33, 0.38, 1.0);
@@ -322,9 +327,14 @@ int g_LastCacheWriteTokens = 0;
         if (ruleX2 > ruleX1 + 10) dl.AddLine(vec2(ruleX1, ruleY), vec2(ruleX2, ruleY), ruleCol, 1);
         UI::Dummy(vec2(0, 2));
 
-        array<string> labels = {"In", "Out", "Msgs", "Turns", "Steps", "Placed", "Removed"};
+        // Lifetime cached input: shown once any cache activity has ever been
+        // recorded; hidden otherwise so cache-less installs keep a tight row.
+        bool lifetimeHasCache = AgentStats::S_TotalCachedReadTokens > 0 || AgentStats::S_TotalCacheWriteTokens > 0;
+        array<string> labels = {"In", "Cached", "Out", "Msgs", "Turns", "Steps", "Placed", "Removed"};
+        if (!lifetimeHasCache) labels.RemoveAt(1);
         array<string> values = {
             FormatTokenCount(AgentStats::S_TotalInputTokens),
+            FormatTokenCount(AgentStats::S_TotalCachedReadTokens + AgentStats::S_TotalCacheWriteTokens),
             FormatTokenCount(AgentStats::S_TotalOutputTokens),
             "" + AgentStats::S_TotalUserMessages,
             "" + AgentStats::S_TotalTurns,
@@ -332,6 +342,7 @@ int g_LastCacheWriteTokens = 0;
             "" + AgentStats::S_TotalBlocksPlaced,
             "" + AgentStats::S_TotalBlocksRemoved
         };
+        if (!lifetimeHasCache) values.RemoveAt(1);
 
         vec2 winPos = UI::GetWindowPos();
         float rightEdge = winPos.x + UI::GetWindowSize().x - 16;
@@ -348,6 +359,13 @@ int g_LastCacheWriteTokens = 0;
                 }
             }
             DrawInlineStat(labels[i], values[i], labelCol);
+            if (lifetimeHasCache && labels[i] == "Cached" && UI::IsItemHovered()) {
+                UI::SetTooltip(
+                    "Lifetime cached input\n"
+                    "cached read: " + FormatTokenCount(AgentStats::S_TotalCachedReadTokens) + " input tokens served from cache (cheap)\n"
+                    "cache write: " + FormatTokenCount(AgentStats::S_TotalCacheWriteTokens) + " input tokens newly written (Anthropic bills 1.25x)"
+                );
+            }
         }
     }
 
@@ -1842,7 +1860,7 @@ int g_LastCacheWriteTokens = 0;
         g_LastCachedReadTokens = cachedReadTokens;
         g_LastCacheWriteTokens = cacheWriteTokens;
         g_RunningOutputTokens += outputTokens;
-        AgentStats::RecordTokens(inputTokens, outputTokens);
+        AgentStats::RecordTokens(inputTokens, outputTokens, cachedReadTokens, cacheWriteTokens);
     }
 
     void RenderMenu() {

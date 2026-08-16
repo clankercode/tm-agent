@@ -762,6 +762,48 @@ namespace AgentUnitTests {
         Assert(ToolFocus::ExtractLocationResultPos(bare) is null, "no pos -> null");
     }
 
+    // --- lifetime cached-input tracking ------------------------------------
+
+    // AgentStats settings persist the user's real lifetime totals: snapshot,
+    // mutate, restore (codebase test convention — no finally in AS).
+    void Test_LifetimeStats_CachedInputAccumulates() {
+        int snapIn = AgentStats::S_TotalInputTokens;
+        int snapOut = AgentStats::S_TotalOutputTokens;
+        int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
+        int snapCacheWrite = AgentStats::S_TotalCacheWriteTokens;
+        AgentStats::RecordTokens(100, 20, 80, 10);
+        AgentStats::RecordTokens(50, 5, 30, 8);
+        AgentStats::RecordTokens(9, 1); // legacy call: no cache fields
+        Assert(AgentStats::S_TotalInputTokens == snapIn + 159, "lifetime input accumulates");
+        Assert(AgentStats::S_TotalOutputTokens == snapOut + 26, "lifetime output accumulates");
+        Assert(AgentStats::S_TotalCachedReadTokens == snapCachedRead + 110, "lifetime cached read accumulates");
+        Assert(AgentStats::S_TotalCacheWriteTokens == snapCacheWrite + 18, "lifetime cache write accumulates");
+        AgentStats::S_TotalInputTokens = snapIn;
+        AgentStats::S_TotalOutputTokens = snapOut;
+        AgentStats::S_TotalCachedReadTokens = snapCachedRead;
+        AgentStats::S_TotalCacheWriteTokens = snapCacheWrite;
+    }
+
+    void Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit() {
+        int snapIn = AgentStats::S_TotalInputTokens;
+        int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
+        int snapCacheWrite = AgentStats::S_TotalCacheWriteTokens;
+        int snapRunningOut = AgentUI::g_RunningOutputTokens;
+        AgentUI::UpdateTokenStats(200, 10, 210, 150, 40);
+        Assert(AgentUI::g_LastCachedReadTokens == 150, "last cached read set");
+        Assert(AgentUI::g_LastCacheWriteTokens == 40, "last cache write set");
+        Assert(AgentStats::S_TotalInputTokens == snapIn + 200, "lifetime input fed from update");
+        Assert(AgentStats::S_TotalCachedReadTokens == snapCachedRead + 150, "lifetime cached read fed from update");
+        Assert(AgentStats::S_TotalCacheWriteTokens == snapCacheWrite + 40, "lifetime cache write fed from update");
+        Assert(AgentUI::g_RunningOutputTokens == snapRunningOut + 10, "running output still accumulates");
+        AgentUI::g_LastCachedReadTokens = 0;
+        AgentUI::g_LastCacheWriteTokens = 0;
+        AgentStats::S_TotalInputTokens = snapIn;
+        AgentStats::S_TotalCachedReadTokens = snapCachedRead;
+        AgentStats::S_TotalCacheWriteTokens = snapCacheWrite;
+        AgentUI::g_RunningOutputTokens = snapRunningOut;
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -801,6 +843,8 @@ namespace AgentUnitTests {
         RegisterUnitTest("token usage missing fields are zero", Test_TokenUsage_MissingFieldsAreZero);
         RegisterUnitTest("tool focus query tools extract center", Test_ToolFocus_QueryToolsExtractCenter);
         RegisterUnitTest("tool focus location result pos extracts", Test_ToolFocus_LocationResultPosExtracts);
+        RegisterUnitTest("lifetime stats cached input accumulates", Test_LifetimeStats_CachedInputAccumulates);
+        RegisterUnitTest("lifetime stats update token stats feeds cache split", Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);

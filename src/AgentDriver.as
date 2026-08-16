@@ -285,6 +285,13 @@ namespace AgentDriver {
             resp["ok"] = true;
             return resp;
         }
+        if (op == "open_token_details") {
+            // Verification helper: one-shot force-open of the collapsed
+            // "Token details" header so a capture can see the stat rows.
+            AgentUI::g_ForceTokenDetailsOpen = true;
+            resp["ok"] = true;
+            return resp;
+        }
         if (op == "debug_base64") {
             // Verification: compare plugin base64 encoding against a known-good
             // reference (newline/MIME handling differs by flag).
@@ -336,6 +343,10 @@ namespace AgentDriver {
             resp["total"] = AgentUI::g_LastTotalTokens;
             resp["cachedRead"] = AgentUI::g_LastCachedReadTokens;
             resp["cacheWrite"] = AgentUI::g_LastCacheWriteTokens;
+            resp["lifetimeInput"] = AgentStats::S_TotalInputTokens;
+            resp["lifetimeOutput"] = AgentStats::S_TotalOutputTokens;
+            resp["lifetimeCachedRead"] = AgentStats::S_TotalCachedReadTokens;
+            resp["lifetimeCacheWrite"] = AgentStats::S_TotalCacheWriteTokens;
             return resp;
         }
         if (op == "get_pill_rects") {
