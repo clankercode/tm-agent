@@ -813,12 +813,21 @@ namespace AgentUI {
         UI::Dummy(vec2(0, 5));
     }
 
+    // Last-known pill rects (screen coords) from the most recent
+    // DrawFollowCamSelector pass — lets the driver verify hit-box layout.
+    Json::Value@ g_LastPillRects = Json::Array();
+
+    Json::Value@ GetLastPillRects() {
+        return g_LastPillRects;
+    }
+
     // Segmented button group, right-aligned in the current window. Returns the
     // clicked segment index, or -1. Segment IDs are uniquified (tag + index):
     // duplicate ##-ids make ImGui collapse hit boxes onto the first item.
     // prefixIcon (e.g. Icons::VideoCamera, or "" for none) is drawn before the
-    // segments as a non-interactive label.
-    int DrawButtonGroup(const string &in tag, string[] &in labels, int active, const string &in prefixIcon) {
+    // segments as a non-interactive label. When rectsOut is given it receives
+    // per-segment screen rects (x,y,w,h) for hit-box verification.
+    int DrawButtonGroup(const string &in tag, string[] &in labels, int active, const string &in prefixIcon, Json::Value@ rectsOut = null) {
         float iconW = prefixIcon.Length > 0 ? UI::MeasureString(prefixIcon).x + 6 : 0;
         float rowW = iconW;
         for (uint i = 0; i < labels.Length; i++) {
@@ -839,15 +848,33 @@ namespace AgentUI {
             if (i > 0) UI::SameLine(0, 4);
             else if (prefixIcon.Length > 0) UI::SameLine(0, 6);
             bool isActive = int(i) == active;
-            if (isActive) {
-                UI::PushStyleColor(UI::Col::Text, vec4(0.00, 0.82, 0.95, 1.0));
-            } else {
-                UI::PushStyleColor(UI::Col::Text, vec4(0.42, 0.46, 0.52, 0.9));
+            // Manual hit rect: Openplanet's Selectable takes no explicit
+            // size arg, and its default SpanAvailWidth stretches every item
+            // to the window's right edge (the first pill would swallow the
+            // row). Dummy() reserves exactly the label width; hover/click are
+            // read from the item state like the eye button does.
+            vec2 labelSz = UI::MeasureString(labels[i]);
+            UI::Dummy(vec2(labelSz.x + 10, 0));
+            bool hover = UI::IsItemHovered();
+            if (hover && UI::IsMouseClicked(UI::MouseButton::Left)) clicked = int(i);
+            vec4 itemRect = UI::GetItemRect();
+            vec4 hitRect = vec4(itemRect.x, itemRect.y, labelSz.x + 10, UI::GetFrameHeight());
+            if (rectsOut !is null) {
+                Json::Value@ e = Json::Object();
+                e["i"] = int(i);
+                e["label"] = labels[i];
+                e["x"] = hitRect.x;
+                e["y"] = hitRect.y;
+                e["w"] = hitRect.z;
+                e["h"] = hitRect.w;
+                rectsOut.Add(e);
             }
-            if (UI::Selectable(labels[i] + "##" + tag + tostring(i), isActive)) {
-                clicked = int(i);
-            }
-            UI::PopStyleColor();
+            vec4 col = isActive ? vec4(0.00, 0.82, 0.95, 1.0)
+                : hover ? vec4(0.62, 0.66, 0.72, 1.0)
+                : vec4(0.42, 0.46, 0.52, 0.9);
+            UI::GetWindowDrawList().AddText(
+                vec2(hitRect.x + 5, hitRect.y + (hitRect.w - labelSz.y) * 0.5),
+                col, labels[i]);
         }
         return clicked;
     }
@@ -865,7 +892,9 @@ namespace AgentUI {
             FollowCam::FollowMode::Cinematic
         };
         string[] labels = { "off", "steps", "swing", "cine" };
-        int clicked = DrawButtonGroup("followmode", labels, int(FollowCam::g_Mode), Icons::VideoCamera);
+        Json::Value@ rects = Json::Array();
+        int clicked = DrawButtonGroup("followmode", labels, int(FollowCam::g_Mode), Icons::VideoCamera, rects);
+        @g_LastPillRects = rects;
         if (clicked >= 0) {
             FollowCam::SetMode(order[clicked]);
             AgentSettings::S_FollowCamMode = FollowCam::ModeToString(order[clicked]);

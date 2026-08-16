@@ -6,7 +6,7 @@ void RenderMenu() {
     AgentUI::RenderMenu();
 }
 
-void Render() {
+void RenderInterface() {
     AgentUI::Render();
 }
 

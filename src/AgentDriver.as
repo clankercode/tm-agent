@@ -329,6 +329,15 @@ namespace AgentDriver {
             resp["messages"] = arr;
             return resp;
         }
+        if (op == "get_pill_rects") {
+            // Verification: screen rects of the follow-mode pills as actually
+            // laid out by DrawButtonGroup (hit boxes come from the same
+            // layout pass). Rendered once per call; rects stay valid after.
+            Json::Value@ arr = AgentUI::GetLastPillRects();
+            resp["ok"] = true;
+            resp["rects"] = arr;
+            return resp;
+        }
         if (op == "inject_tool_result") {
             // Verification: run the full screenshot post-processing path for a
             // synthetic TakeScreenshot-shaped result.
