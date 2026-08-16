@@ -160,7 +160,17 @@ namespace FollowCam {
         ToolFocus::FocusPos@ fp = ToolFocus::ExtractFocusPos(toolName, input);
         if (fp is null || !fp.valid) return false;
 
-        vec3 target = fp.pos;
+        return Retarget(fp.pos);
+    }
+
+    // Position-query results (GetBlockLocation etc.) arrive with an explicit
+    // world position — same retarget path as tool inputs.
+    bool OnQueryResultPos(const vec3 &in target) {
+        if (g_Mode == FollowMode::Off) return false;
+        return Retarget(target);
+    }
+
+    bool Retarget(const vec3 &in target) {
 
         // First activity after enable: prime the goal WITHOUT a discrete
         // move — smooth modes start easing from wherever the user's camera

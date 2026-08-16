@@ -730,6 +730,38 @@ namespace AgentUnitTests {
         Assert(split.cacheWrite == 0, "bare cache write");
     }
 
+    // --- query-tool focus + cursor -----------------------------------------
+
+    void Test_ToolFocus_QueryToolsExtractCenter() {
+        // GetBlocks with world-meter center: the follow cam should track it.
+        Json::Value@ input = Json::Parse('{"x":1248.0,"y":128.0,"z":864.0,"radius":15.0}');
+        ToolFocus::FocusPos@ fp = ToolFocus::ExtractFocusPos("GetBlocks", input);
+        Assert(fp !is null && fp.valid, "GetBlocks center should extract");
+        Assert(Math::Abs(fp.pos.x - 1248.0) < 0.01, "GetBlocks x is world meters");
+        Assert(fp.worldCoords, "GetBlocks coords are world");
+        // Whole-map query (no coords): nothing to focus.
+        Json::Value@ whole = Json::Parse('{"limit":50}');
+        ToolFocus::FocusPos@ fp2 = ToolFocus::ExtractFocusPos("GetBlocks", whole);
+        Assert(fp2 is null, "whole-map GetBlocks has no focus");
+        // Eye-button eligibility now includes query tools.
+        Assert(ToolFocus::ToolHasFocusTarget("GetBlocks"), "eye shows for GetBlocks");
+        Assert(ToolFocus::ToolHasFocusTarget("tm-mcp-pack-epp.GetBlockLocation"), "eye shows for GetBlockLocation");
+        Assert(ToolFocus::IsPositionQueryTool("GetItems"), "GetItems is a query tool");
+        Assert(!ToolFocus::IsPositionQueryTool("PlaceBlock"), "PlaceBlock is not a query tool");
+    }
+
+    void Test_ToolFocus_LocationResultPosExtracts() {
+        // GetBlockLocation RESULT carries pos:[x,y,z] world meters.
+        Json::Value@ result = Json::Parse('{"name":"RoadTechStart","pos":{"z":896,"y":128,"x":1344},"isFree":false}');
+        ToolFocus::FocusPos@ fp = ToolFocus::ExtractLocationResultPos(result);
+        Assert(fp !is null && fp.valid, "result pos should extract");
+        Assert(Math::Abs(fp.pos.x - 1344.0) < 0.01, "result x");
+        Assert(fp.worldCoords, "result coords are world");
+        // Missing pos -> null.
+        Json::Value@ bare = Json::Parse('{"name":"x"}');
+        Assert(ToolFocus::ExtractLocationResultPos(bare) is null, "no pos -> null");
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -767,6 +799,8 @@ namespace AgentUnitTests {
         RegisterUnitTest("token usage cache split openai shape", Test_TokenUsage_CacheSplitFromOpenAIShape);
         RegisterUnitTest("token usage cache split anthropic shape", Test_TokenUsage_CacheSplitFromAnthropicShape);
         RegisterUnitTest("token usage missing fields are zero", Test_TokenUsage_MissingFieldsAreZero);
+        RegisterUnitTest("tool focus query tools extract center", Test_ToolFocus_QueryToolsExtractCenter);
+        RegisterUnitTest("tool focus location result pos extracts", Test_ToolFocus_LocationResultPosExtracts);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);

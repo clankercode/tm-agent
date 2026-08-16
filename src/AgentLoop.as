@@ -381,6 +381,24 @@ void RecordToolResult(Json::Value@ toolCall, Json::Value@ actualResult) {
     AgentUI::AddToolResult(name, resultJson);
     LlmHistory::AddToolResult(toolCallId, name, resultJson);
     ProcessScreenshotResult(name, actualResult);
+    ProcessQueryFocusResult(name, actualResult);
+}
+
+// Query-follow: when a position-lookup tool returns a location, focus the
+// follow camera on it and move the editor cursor to the same spot. Runs on
+// the recorded result (the nested MCP output), so async tools land here too.
+void ProcessQueryFocusResult(const string &in name, Json::Value@ actualResult) {
+    string local = ToolFocus::LocalToolName(name);
+    if (local != "GetBlockLocation" && local != "GetItemLocation") return;
+    Json::Value@ payload = actualResult;
+    // MCP results nest under output; unwrap when present.
+    if (payload !is null && payload.HasKey("output") && payload["output"].GetType() == Json::Type::Object) {
+        @payload = payload["output"];
+    }
+    ToolFocus::FocusPos@ fp = ToolFocus::ExtractLocationResultPos(payload);
+    if (fp is null) return;
+    FollowCam::OnQueryResultPos(fp.pos);
+    ToolFocus::MoveCursorToWorld(fp.pos);
 }
 
 // Screenshot post-processing: show the image in the chatlog and (for

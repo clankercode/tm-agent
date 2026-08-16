@@ -6,7 +6,11 @@ version  = "0.2.0"
 
 [script]
 #__DEFINES__
-dependencies = ["tm-control-mcp", "tm-mcp-pack-epp", "ai-api", "MLHook"]
+# tm-mcp-pack-epp is intentionally NOT a hard dependency: pack tools are
+# dispatched by name through the TmMcp bus and degrade gracefully (core
+# fallbacks) when the pack isn't loaded. A hard dep made every pack reload
+# unload tm-agent as a dependent.
+dependencies = ["tm-control-mcp", "ai-api", "MLHook"]
 export_dependencies = ["MLHook"]
 
 module = "Agent"

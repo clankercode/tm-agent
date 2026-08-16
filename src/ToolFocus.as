@@ -45,9 +45,16 @@ namespace ToolFocus {
         if (HasXYZ(obj)) {
             fp.pos = vec3(ReadNum(obj, "x"), ReadNum(obj, "y"), ReadNum(obj, "z"));
         } else if (obj.HasKey("pos")) {
-            auto arr = obj.Get("pos");
-            if (arr is null || arr.GetType() != Json::Type::Array || arr.Length < 3) return fp;
-            fp.pos = vec3(float(arr[0]), float(arr[1]), float(arr[2]));
+            auto pos = obj.Get("pos");
+            if (pos.GetType() == Json::Type::Array && pos.Length >= 3) {
+                fp.pos = vec3(float(pos[0]), float(pos[1]), float(pos[2]));
+            } else if (pos.GetType() == Json::Type::Object
+                && pos.HasKey("x") && pos.HasKey("y") && pos.HasKey("z")) {
+                // Pack tools emit pos as {x,y,z} objects.
+                fp.pos = vec3(float(pos["x"]), float(pos["y"]), float(pos["z"]));
+            } else {
+                return fp;
+            }
         } else {
             return fp;
         }
@@ -101,7 +108,24 @@ namespace ToolFocus {
             || local == "PlaceItem"
             || local == "FocusCamera"
             || local == "SetCamGoTo"
-            || local == "PlaceNamedMacroblock";
+            || local == "PlaceNamedMacroblock"
+            || local == "GetBlocks"
+            || local == "GetItems"
+            || local == "GetBlockLocation"
+            || local == "GetItemLocation";
+    }
+
+    // Position-query tools: the agent is LOOKING at an area, not acting on a
+    // single spot. GetBlocks/GetItems take an optional center x/y/z (world
+    // meters) + radius; GetBlock/ItemLocation take a block index. These feed
+    // the follow camera (see FollowCam::OnAgentActivity) so the user sees
+    // where the agent is inspecting.
+    bool IsPositionQueryTool(const string &in toolName) {
+        string local = LocalToolName(toolName);
+        return local == "GetBlocks"
+            || local == "GetItems"
+            || local == "GetBlockLocation"
+            || local == "GetItemLocation";
     }
 
     // Returns a valid FocusPos for tools whose input names a position, or
@@ -130,11 +154,42 @@ namespace ToolFocus {
         } else if (local == "PlaceItem" || local == "FocusCamera" || local == "SetCamGoTo"
             || local == "PlaceNamedMacroblock") {
             @fp = FromWorldXYZ(input);
+        } else if (local == "GetBlocks" || local == "GetItems") {
+            // Query center is optional; no coords means "whole map" — nothing
+            // to focus.
+            @fp = FromWorldXYZ(input);
+        } else if (local == "GetBlockLocation" || local == "GetItemLocation") {
+            // Index-based lookup: no coords in the call. Focus happens on the
+            // RESULT (handled by ProcessToolCallsImpl), not the request.
+            return null;
         } else {
             return null;
         }
         if (fp is null || !fp.valid) return null;
         return fp;
+    }
+
+    // World position out of a GetBlockLocation / GetItemLocation RESULT
+    // (output carries pos:{x,y,z} in world meters). Returns null when the
+    // result has no position.
+    FocusPos@ ExtractLocationResultPos(const Json::Value &in result) {
+        if (result is null || !result.HasKey("pos")) return null;
+        return FromWorldXYZ(result);
+    }
+
+    // Move the editor cursor to a world position (pack MoveCursorToWorld,
+    // E++ SetAllCursorPos). Best-effort: silently skipped when the pack is
+    // absent — the follow camera alone still shows the area.
+    void MoveCursorToWorld(const vec3 &in worldPos) {
+        Json::Value input = Json::Object();
+        input["x"] = worldPos.x;
+        input["y"] = worldPos.y;
+        input["z"] = worldPos.z;
+        try {
+            TmMcp::CallTool("tm-mcp-pack-epp.MoveCursorToWorld", input);
+        } catch {
+            // Pack missing or tool unavailable — not user-facing.
+        }
     }
 
     // --- Focus execution -----------------------------------------------------
