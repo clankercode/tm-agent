@@ -154,6 +154,9 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     if (request is null || request.generation != g_RunGeneration) return;
 
     Json::Value@ tools = ToolAssembler::GetToolList();
+    // Real request: bypass the UI's snapshot TTL so the model sees current
+    // editor state, not something up to 5s old.
+    ToolAssembler::InvalidateEditorStateCache();
     string editorState = LlmHistory::BoundEditorStateForBudget(
         tools, AgentSettings::S_MaxHistoryTokens, ToolAssembler::GetEditorStateSnapshot());
     if (!LlmHistory::CompactHistory(tools, AgentSettings::S_MaxHistoryTokens, editorState)) {

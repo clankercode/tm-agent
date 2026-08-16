@@ -129,7 +129,29 @@ namespace ToolAssembler {
         return Json::Write(result);
     }
 
+    // Editor-state snapshot cache. The chat UI rebuilds context stats every
+    // frame; without a TTL this fires 4 MCP tool calls per frame (~240/s),
+    // flooding the log. UI stats tolerate a stale snapshot; real requests
+    // invalidate first via InvalidateEditorStateCache().
+    string g_EditorStateCache = "";
+    uint g_EditorStateCacheAt = 0;
+    const uint EDITOR_STATE_TTL_MS = 5000;
+
+    void InvalidateEditorStateCache() {
+        g_EditorStateCacheAt = 0;
+    }
+
     string GetEditorStateSnapshot() {
+        uint now = Time::Now;
+        if (g_EditorStateCacheAt > 0 && now - g_EditorStateCacheAt < EDITOR_STATE_TTL_MS) {
+            return g_EditorStateCache;
+        }
+        g_EditorStateCache = BuildEditorStateSnapshot();
+        g_EditorStateCacheAt = now;
+        return g_EditorStateCache;
+    }
+
+    string BuildEditorStateSnapshot() {
         string state = "EDITOR STATE:\n";
 
         Json::Value@ empty = Json::Object();
