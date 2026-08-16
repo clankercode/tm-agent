@@ -152,11 +152,11 @@ namespace AgentUI {
     }
 
     string CurrentProviderLabel() {
-        return AgentSettings::S_Provider == Provider::MiniMax ? "minimax" : "openai";
+        return AgentSettings::CurrentProviderLabel();
     }
 
     string CurrentModelLabel() {
-        return AgentSettings::S_Provider == Provider::MiniMax ? AgentSettings::S_MiniMaxModel : AgentSettings::S_OpenAIModel;
+        return AgentSettings::CurrentModel();
     }
 
     void DrawProgressBar(float fillRatio) {
@@ -1300,6 +1300,125 @@ namespace AgentUI {
         UI::PopStyleColor(5);
     }
 
+    // ------------------------------------------------------------------
+    // Settings helpers: provider display names, model combo with catalog,
+    // effort combo driven by models.dev reasoning_values.
+    // ------------------------------------------------------------------
+
+    string ProviderDisplayName(Provider p) {
+        switch (p) {
+            case Provider::MiniMax: return "MiniMax";
+            case Provider::OpenAI: return "OpenAI";
+            case Provider::CustomOpenAI: return "Custom (OpenAI-compatible)";
+            case Provider::CustomAnthropic: return "Custom (Anthropic-compatible)";
+        }
+        return "Unknown";
+    }
+
+    // Catalog id for the active provider (used by ModelCatalog state).
+    string CatalogIdFor(Provider p) {
+        switch (p) {
+            case Provider::OpenAI: return "openai";
+            case Provider::CustomOpenAI: return "custom-openai";
+            case Provider::CustomAnthropic: return "custom-anthropic";
+        }
+        return "";
+    }
+
+    // Auto-fetch-on-open helper: if the provider supports listing and no
+    // catalog is resident yet, kick one fetch (button-free UX).
+    void MaybeAutoFetchCatalog() {
+        string catalogId = CatalogIdFor(AgentSettings::S_Provider);
+        if (catalogId.Length == 0) return;
+        if (ModelCatalog::GetCatalog(catalogId) !is null) return;
+        if (ModelCatalog::IsFetching()) return;
+        string apiKey = AgentSettings::CurrentApiKey();
+        if (apiKey.Length == 0) return;
+        if (AgentSettings::S_Provider == Provider::OpenAI) {
+            ModelCatalog::StartFetchCatalog(catalogId, false, apiKey, "https://api.openai.com/v1");
+        } else if (AgentSettings::S_Provider == Provider::CustomOpenAI) {
+            if (AgentSettings::S_CustomOpenAIBaseUrl.Length == 0) return;
+            ModelCatalog::StartFetchCatalog(catalogId, false, apiKey, AgentSettings::S_CustomOpenAIBaseUrl);
+        } else if (AgentSettings::S_Provider == Provider::CustomAnthropic) {
+            if (AgentSettings::S_CustomAnthropicBaseUrl.Length == 0) return;
+            ModelCatalog::StartFetchCatalog(catalogId, true, apiKey, AgentSettings::S_CustomAnthropicBaseUrl);
+        }
+    }
+
+    // Model row: text input + (optional) dropdown fed by the provider's
+    // /models listing. Writes the selection into ModelCatalog::
+    // _pendingModelSelection when a catalog entry is chosen; otherwise the
+    // caller's current value flows through unchanged.
+    void DrawModelRow(const string &in label, const string &in current, array<string>@ catalog, const string &in fallbackHint) {
+        // Free-text entry first — for exotic/custom ids the listing may not
+        // include. A combo selection below overwrites the same-frame value,
+        // so ordering (input, then combo) keeps both paths working.
+        string edited = UI::InputText(label + " (custom)", current);
+        ModelCatalog::_pendingModelSelection = edited;
+        if (catalog !is null && catalog.Length > 0) {
+            // Dropdown fed by the provider's /models listing; selection
+            // auto-populates limits/effort from models.dev metadata.
+            if (UI::BeginCombo(label, current)) {
+                for (uint i = 0; i < catalog.Length; i++) {
+                    if (UI::Selectable(catalog[i], catalog[i] == current)) {
+                        ModelCatalog::_pendingModelSelection = catalog[i];
+                        ModelCatalog::ApplyModelMetaToSettings();
+                    }
+                }
+                UI::EndCombo();
+            }
+            if (UI::IsItemHovered()) {
+                UI::SetTooltip(catalog.Length + " models listed" + (ModelCatalog::IsFetching() ? "; refreshing…" : ""));
+            }
+        }
+    }
+
+    // Effort combo fed by models.dev reasoning_values when known.
+    void DrawEffortCombo(const string &in label, const string &in current, const string &in providerKey) {
+        array<string> efforts = ModelCatalog::EffortChoicesFor(providerKey);
+        if (UI::BeginCombo(label, current)) {
+            for (uint i = 0; i < efforts.Length; i++) {
+                if (UI::Selectable(efforts[i], efforts[i] == current)) {
+                    if (providerKey == "openai") {
+                        AgentSettings::S_OpenAIReasoningEffort = efforts[i];
+                    } else if (providerKey == "custom-openai") {
+                        AgentSettings::S_CustomOpenAIReasoningEffort = efforts[i];
+                    }
+                }
+            }
+            UI::EndCombo();
+        }
+    }
+
+    // One-line summary of models.dev metadata for the active model:
+    // context/output limits, reasoning support. Kicks the weekly
+    // models.dev refresh from a dedicated coroutine.
+    void DrawModelMetaLine() {
+        UI::Dummy(vec2(0, 2));
+        ModelCatalog::ModelMeta@ meta = ModelCatalog::CurrentModelMeta();
+        string line;
+        if (meta.known) {
+            line = Icons::Info + " " + meta.model + ": "
+                + (meta.contextTokens > 0 ? "" + meta.contextTokens + " ctx" : "ctx ?")
+                + " / " + (meta.outputTokens > 0 ? "" + meta.outputTokens + " out" : "out ?")
+                + (meta.reasoning ? " · reasoning" : "");
+        } else {
+            line = Icons::Info + " " + meta.model + ": no models.dev metadata (cache "
+                + (AiApi::ModelsDevCacheIsFresh() ? "fresh" : "stale/missing") + ")";
+        }
+        UI::Text(line);
+        if (UI::IsItemHovered()) {
+            UI::SetTooltip("models.dev metadata, cached for 7 days. Context auto-populates Max History Tokens.");
+        }
+        if (!AiApi::ModelsDevCacheIsFresh() && !AiApi::ModelsDevFetchInFlight()) {
+            startnew(ModelsDevRefreshCoro);
+        }
+    }
+
+    void ModelsDevRefreshCoro() {
+        AiApi::ModelsDevRefreshIfNeeded();
+    }
+
     void RenderSettingsWindow() {
         PushTheme();
         UI::SetNextWindowSize(420, 0, UI::Cond::FirstUseEver);
@@ -1312,7 +1431,8 @@ namespace AgentUI {
             int keyFlags = UI::InputTextFlags::Password;
 
             DrawSectionHeader("PROVIDER", Icons::Plug);
-            string currentProvider = AgentSettings::S_Provider == Provider::MiniMax ? "MiniMax" : "OpenAI";
+            MaybeAutoFetchCatalog();
+            string currentProvider = ProviderDisplayName(AgentSettings::S_Provider);
             if (UI::BeginCombo("Provider", currentProvider)) {
                 if (UI::Selectable("MiniMax", AgentSettings::S_Provider == Provider::MiniMax)) {
                     AgentSettings::S_Provider = Provider::MiniMax;
@@ -1320,28 +1440,45 @@ namespace AgentUI {
                 if (UI::Selectable("OpenAI", AgentSettings::S_Provider == Provider::OpenAI)) {
                     AgentSettings::S_Provider = Provider::OpenAI;
                 }
+                if (UI::Selectable("Custom (OpenAI-compatible)", AgentSettings::S_Provider == Provider::CustomOpenAI)) {
+                    AgentSettings::S_Provider = Provider::CustomOpenAI;
+                }
+                if (UI::Selectable("Custom (Anthropic-compatible)", AgentSettings::S_Provider == Provider::CustomAnthropic)) {
+                    AgentSettings::S_Provider = Provider::CustomAnthropic;
+                }
                 UI::EndCombo();
             }
 
             if (AgentSettings::S_Provider == Provider::MiniMax) {
                 DrawSectionHeader("MINIMAX", Icons::Key);
                 AgentSettings::S_MiniMaxApiKey = UI::InputText("API Key", AgentSettings::S_MiniMaxApiKey, keyFlags);
-                AgentSettings::S_MiniMaxModel = UI::InputText("Model", AgentSettings::S_MiniMaxModel);
-            } else {
+                DrawModelRow("Model", AgentSettings::S_MiniMaxModel, null, "minimax");
+                AgentSettings::S_MiniMaxModel = ModelCatalog::_pendingModelSelection;
+            } else if (AgentSettings::S_Provider == Provider::OpenAI) {
                 DrawSectionHeader("OPENAI", Icons::Key);
                 AgentSettings::S_OpenAIApiKey = UI::InputText("API Key", AgentSettings::S_OpenAIApiKey, keyFlags);
-                AgentSettings::S_OpenAIModel = UI::InputText("Model", AgentSettings::S_OpenAIModel);
-                string currentEffort = AgentSettings::S_OpenAIReasoningEffort;
-                if (UI::BeginCombo("Reasoning Effort", currentEffort)) {
-                    array<string> efforts = { "none", "minimal", "low", "medium", "high", "xhigh" };
-                    for (uint i = 0; i < efforts.Length; i++) {
-                        if (UI::Selectable(efforts[i], currentEffort == efforts[i])) {
-                            AgentSettings::S_OpenAIReasoningEffort = efforts[i];
-                        }
-                    }
-                    UI::EndCombo();
-                }
+                DrawModelRow("Model", AgentSettings::S_OpenAIModel, ModelCatalog::GetCatalog("openai"), "openai");
+                AgentSettings::S_OpenAIModel = ModelCatalog::_pendingModelSelection;
+                DrawEffortCombo("Reasoning Effort", AgentSettings::S_OpenAIReasoningEffort, "openai");
+            } else if (AgentSettings::S_Provider == Provider::CustomOpenAI) {
+                DrawSectionHeader("CUSTOM OPENAI-COMPATIBLE", Icons::Key);
+                AgentSettings::S_CustomOpenAIBaseUrl = UI::InputText("Base URL", AgentSettings::S_CustomOpenAIBaseUrl);
+                if (UI::IsItemHovered()) UI::SetTooltip("e.g. https://openrouter.ai/api/v1 — /chat/completions is appended.");
+                AgentSettings::S_CustomOpenAIApiKey = UI::InputText("API Key", AgentSettings::S_CustomOpenAIApiKey, keyFlags);
+                DrawModelRow("Model", AgentSettings::S_CustomOpenAIModel, ModelCatalog::GetCatalog("custom-openai"), "custom-openai");
+                AgentSettings::S_CustomOpenAIModel = ModelCatalog::_pendingModelSelection;
+                DrawEffortCombo("Reasoning Effort", AgentSettings::S_CustomOpenAIReasoningEffort, "custom-openai");
+            } else {
+                DrawSectionHeader("CUSTOM ANTHROPIC-COMPATIBLE", Icons::Key);
+                AgentSettings::S_CustomAnthropicBaseUrl = UI::InputText("Base URL", AgentSettings::S_CustomAnthropicBaseUrl);
+                if (UI::IsItemHovered()) UI::SetTooltip("e.g. https://api.anthropic.com — /v1/messages is appended.");
+                AgentSettings::S_CustomAnthropicApiKey = UI::InputText("API Key", AgentSettings::S_CustomAnthropicApiKey, keyFlags);
+                DrawModelRow("Model", AgentSettings::S_CustomAnthropicModel, ModelCatalog::GetCatalog("custom-anthropic"), "custom-anthropic");
+                AgentSettings::S_CustomAnthropicModel = ModelCatalog::_pendingModelSelection;
             }
+
+            // models.dev metadata line for the current model, if known.
+            DrawModelMetaLine();
 
             // Provider Test — sends a single "ping" request to confirm the
             // key+model combo is actually reachable. Status renders inline.

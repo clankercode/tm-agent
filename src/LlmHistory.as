@@ -168,7 +168,7 @@ namespace LlmHistory {
         const string &in model,
         const string &in reasoningEffort
     ) {
-        if (provider == Provider::MiniMax) {
+        if (AgentSettings::ProviderUsesAnthropicShape(provider)) {
             string system;
             Json::Value@ messages = GetMessagesForAnthropic(tools, system, editorState);
             return AiApi::BuildAnthropicRequestBody(model, messages, tools, system);
@@ -189,9 +189,8 @@ namespace LlmHistory {
 
     int CountOutboundTokens(Json::Value@ tools, const string &in editorState) {
         Provider provider = AgentSettings::S_Provider;
-        string model = provider == Provider::MiniMax
-            ? AgentSettings::S_MiniMaxModel : AgentSettings::S_OpenAIModel;
-        string effort = provider == Provider::OpenAI ? AgentSettings::S_OpenAIReasoningEffort : "";
+        string model = AgentSettings::CurrentModel();
+        string effort = AgentSettings::CurrentReasoningEffort();
         // One UTF-8 byte per token is a formally conservative bound for these
         // JSON request bodies. The ceiling therefore cannot be exceeded by the
         // actual provider input even without a model-specific tokenizer.
@@ -205,11 +204,10 @@ namespace LlmHistory {
         system["content"] = BuildSystemPrompt(tools);
         fixedMessages.Add(system);
         Provider provider = AgentSettings::S_Provider;
-        string model = provider == Provider::MiniMax
-            ? AgentSettings::S_MiniMaxModel : AgentSettings::S_OpenAIModel;
-        string effort = provider == Provider::OpenAI ? AgentSettings::S_OpenAIReasoningEffort : "";
+        string model = AgentSettings::CurrentModel();
+        string effort = AgentSettings::CurrentReasoningEffort();
         string body;
-        if (provider == Provider::MiniMax) {
+        if (AgentSettings::ProviderUsesAnthropicShape(provider)) {
             body = AiApi::BuildAnthropicRequestBody(model, Json::Array(), tools, BuildSystemPrompt(tools));
         } else {
             body = AiApi::BuildOpenAIRequestBody(model, effort, fixedMessages, tools);

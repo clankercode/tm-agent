@@ -1,9 +1,12 @@
 enum Provider {
     MiniMax = 0,
-    OpenAI = 1
+    OpenAI = 1,
+    CustomOpenAI = 2,
+    CustomAnthropic = 3
 }
 
 namespace AgentSettings {
+
     [Setting category="API" name="MiniMax" password]
     string S_MiniMaxApiKey = "";
 
@@ -19,6 +22,27 @@ namespace AgentSettings {
     [Setting category="API" name="OpenAI Effort"]
     string S_OpenAIReasoningEffort = "high";
 
+    [Setting category="API" name="Custom OpenAI Base URL"]
+    string S_CustomOpenAIBaseUrl = "";
+
+    [Setting category="API" name="Custom OpenAI Key" password]
+    string S_CustomOpenAIApiKey = "";
+
+    [Setting category="API" name="Custom OpenAI Model"]
+    string S_CustomOpenAIModel = "";
+
+    [Setting category="API" name="Custom OpenAI Effort"]
+    string S_CustomOpenAIReasoningEffort = "high";
+
+    [Setting category="API" name="Custom Anthropic Base URL"]
+    string S_CustomAnthropicBaseUrl = "";
+
+    [Setting category="API" name="Custom Anthropic Key" password]
+    string S_CustomAnthropicApiKey = "";
+
+    [Setting category="API" name="Custom Anthropic Model"]
+    string S_CustomAnthropicModel = "";
+
     [Setting category="API" name="Provider"]
     Provider S_Provider = Provider::MiniMax;
 
@@ -30,4 +54,60 @@ namespace AgentSettings {
 
     [Setting category="UI" name="Show Window"]
     bool S_ShowWindow = true;
+
+    // ------------------------------------------------------------------
+    // Provider helpers — shared by AgentLoop, LlmHistory, ChatUI, tests.
+    // ------------------------------------------------------------------
+
+    bool ProviderUsesAnthropicShape(Provider p) {
+        return p == Provider::MiniMax || p == Provider::CustomAnthropic;
+    }
+
+    string CurrentApiKey() {
+        switch (S_Provider) {
+            case Provider::MiniMax:
+                return S_MiniMaxApiKey;
+            case Provider::OpenAI:
+                return S_OpenAIApiKey;
+            case Provider::CustomOpenAI:
+                return S_CustomOpenAIApiKey;
+            case Provider::CustomAnthropic:
+                return S_CustomAnthropicApiKey;
+        }
+        return "";
+    }
+
+    string CurrentModel() {
+        switch (S_Provider) {
+            case Provider::MiniMax:
+                return S_MiniMaxModel;
+            case Provider::OpenAI:
+                return S_OpenAIModel;
+            case Provider::CustomOpenAI:
+                return S_CustomOpenAIModel;
+            case Provider::CustomAnthropic:
+                return S_CustomAnthropicModel;
+        }
+        return "";
+    }
+
+    string CurrentReasoningEffort() {
+        switch (S_Provider) {
+            case Provider::OpenAI:
+                return S_OpenAIReasoningEffort;
+            case Provider::CustomOpenAI:
+                return S_CustomOpenAIReasoningEffort;
+        }
+        return "";
+    }
+
+    string CurrentProviderLabel() {
+        switch (S_Provider) {
+            case Provider::MiniMax: return "minimax";
+            case Provider::OpenAI: return "openai";
+            case Provider::CustomOpenAI: return "custom-openai";
+            case Provider::CustomAnthropic: return "custom-anthropic";
+        }
+        return "unknown";
+    }
 }

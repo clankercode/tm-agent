@@ -52,21 +52,26 @@ void ProviderTestCoro() {
 void ProviderTestCoroImpl() {
     uint tStart = Time::Now;
     Provider provider = AgentSettings::S_Provider;
-    string provLabel = (provider == Provider::MiniMax) ? "minimax" : "openai";
-    string apiKey;
-    string model;
-    if (provider == Provider::MiniMax) {
-        apiKey = AgentSettings::S_MiniMaxApiKey;
-        model = AgentSettings::S_MiniMaxModel;
-    } else {
-        apiKey = AgentSettings::S_OpenAIApiKey;
-        model = AgentSettings::S_OpenAIModel;
-    }
+    string provLabel = AgentSettings::CurrentProviderLabel();
+    string apiKey = AgentSettings::CurrentApiKey();
+    string model = AgentSettings::CurrentModel();
 
     print("[tm-agent] test: provider=" + provLabel + " model=" + model + " keyLen=" + apiKey.Length);
 
     if (apiKey.Length == 0) {
         AgentUI::g_TestResult = "No API key set";
+        AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
+        AgentUI::g_TestRunning = false;
+        return;
+    }
+    if (provider == Provider::CustomOpenAI && AgentSettings::S_CustomOpenAIBaseUrl.Length == 0) {
+        AgentUI::g_TestResult = "No base URL set";
+        AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
+        AgentUI::g_TestRunning = false;
+        return;
+    }
+    if (provider == Provider::CustomAnthropic && AgentSettings::S_CustomAnthropicBaseUrl.Length == 0) {
+        AgentUI::g_TestResult = "No base URL set";
         AgentUI::g_TestColor = vec4(0.96, 0.32, 0.30, 1.0);
         AgentUI::g_TestRunning = false;
         return;
@@ -81,6 +86,14 @@ void ProviderTestCoroImpl() {
     Json::Value@ resp;
     if (provider == Provider::MiniMax) {
         @resp = AiApi::Anthropic_Complete(apiKey, model, msgs, tools);
+    } else if (provider == Provider::CustomAnthropic) {
+        AiApi::ILlmProvider@ custom = AiApi::NewCustomAnthropicProvider(apiKey, AgentSettings::S_CustomAnthropicBaseUrl);
+        @resp = custom.CompleteAnthropicMessages(model, msgs, tools);
+    } else if (provider == Provider::CustomOpenAI) {
+        // Use the configured effort so "Test Provider" validates the
+        // actual config you use in real turns, not a hardcoded placeholder.
+        AiApi::ILlmProvider@ custom = AiApi::NewCustomOpenAIProvider(apiKey, AgentSettings::S_CustomOpenAIBaseUrl);
+        @resp = custom.Complete(model, AgentSettings::S_CustomOpenAIReasoningEffort, msgs, tools);
     } else {
         // Use the configured effort so "Test Provider" validates the
         // actual config you use in real turns, not a hardcoded placeholder.
@@ -153,18 +166,18 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     Json::Value@ messages = LlmHistory::GetMessagesForLlm(tools, editorState);
 
     Provider provider = AgentSettings::S_Provider;
-    string apiKey;
-    string model;
+    string apiKey = AgentSettings::CurrentApiKey();
+    string model = AgentSettings::CurrentModel();
 
-    if (provider == Provider::MiniMax && AgentSettings::S_MiniMaxApiKey.Length > 0) {
-        apiKey = AgentSettings::S_MiniMaxApiKey;
-        model = AgentSettings::S_MiniMaxModel;
-    } else if (provider == Provider::OpenAI && AgentSettings::S_OpenAIApiKey.Length > 0) {
-        apiKey = AgentSettings::S_OpenAIApiKey;
-        model = AgentSettings::S_OpenAIModel;
-    } else {
+    bool missingConfig = apiKey.Length == 0;
+    if (!missingConfig && provider == Provider::CustomOpenAI) {
+        missingConfig = AgentSettings::S_CustomOpenAIBaseUrl.Length == 0;
+    } else if (!missingConfig && provider == Provider::CustomAnthropic) {
+        missingConfig = AgentSettings::S_CustomAnthropicBaseUrl.Length == 0;
+    }
+    if (missingConfig) {
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "No valid API key configured");
-        AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: No valid API key configured. Please check your settings.");
+        AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: No valid API key/base URL configured. Please check your settings.");
         g_State = STATE_IDLE;
         return;
     }
@@ -174,6 +187,19 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         string system;
         Json::Value@ anthropicMessages = LlmHistory::GetMessagesForAnthropic(tools, system, editorState);
         @resp = AiApi::Anthropic_Complete(apiKey, model, anthropicMessages, ToolAssembler::GetToolList(), system);
+    } else if (provider == Provider::CustomAnthropic) {
+        AiApi::ILlmProvider@ custom = AiApi::NewCustomAnthropicProvider(apiKey, AgentSettings::S_CustomAnthropicBaseUrl);
+        string system;
+        Json::Value@ anthropicMessages = LlmHistory::GetMessagesForAnthropic(tools, system, editorState);
+        @resp = custom.CompleteAnthropicMessages(model, anthropicMessages, ToolAssembler::GetToolList(), system);
+    } else if (provider == Provider::CustomOpenAI) {
+        AiApi::ILlmProvider@ custom = AiApi::NewCustomOpenAIProvider(apiKey, AgentSettings::S_CustomOpenAIBaseUrl);
+        @resp = custom.Complete(
+            model,
+            AgentSettings::S_CustomOpenAIReasoningEffort,
+            messages,
+            ToolAssembler::GetToolList()
+        );
     } else {
         array<string> responsesPrefixes = {"gpt-5"};
         AiApi::ILlmProvider@ oai = AiApi::NewOpenAIProvider(apiKey, responsesPrefixes);

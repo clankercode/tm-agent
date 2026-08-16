@@ -27,6 +27,42 @@ namespace AgentUnitTests {
         AgentSettings::S_Provider = previous;
     }
 
+    void Test_CustomProviders_SettingsAndHelpers() {
+        Assert(int(Provider::CustomOpenAI) == 2, "CustomOpenAI enum value should be stable");
+        Assert(int(Provider::CustomAnthropic) == 3, "CustomAnthropic enum value should be stable");
+        Assert(AgentSettings::S_CustomOpenAIReasoningEffort == "high"
+            || AgentSettings::S_CustomOpenAIReasoningEffort.Length > 0,
+            "custom openai effort should be a non-empty string (default high)");
+        // Note: base URL/key/model are user-configured persisted settings —
+        // snapshot & restore rather than assume factory defaults.
+
+        // Shape classification used by LlmHistory + AgentLoop dispatch.
+        Assert(AgentSettings::ProviderUsesAnthropicShape(Provider::MiniMax),
+            "MiniMax uses the Anthropic wire shape");
+        Assert(AgentSettings::ProviderUsesAnthropicShape(Provider::CustomAnthropic),
+            "CustomAnthropic uses the Anthropic wire shape");
+        Assert(!AgentSettings::ProviderUsesAnthropicShape(Provider::OpenAI),
+            "OpenAI uses the OpenAI wire shape");
+        Assert(!AgentSettings::ProviderUsesAnthropicShape(Provider::CustomOpenAI),
+            "CustomOpenAI uses the OpenAI wire shape");
+
+        // Accessors route to the right settings per provider.
+        Provider previous = AgentSettings::S_Provider;
+        AgentSettings::S_Provider = Provider::CustomOpenAI;
+        Assert(AgentSettings::CurrentModel() == AgentSettings::S_CustomOpenAIModel,
+            "CurrentModel should route to the custom-openai model");
+        Assert(AgentSettings::CurrentReasoningEffort() == AgentSettings::S_CustomOpenAIReasoningEffort,
+            "CurrentReasoningEffort should route to the custom-openai effort");
+        Assert(AgentSettings::CurrentProviderLabel() == "custom-openai",
+            "provider label should be custom-openai");
+        AgentSettings::S_Provider = Provider::CustomAnthropic;
+        Assert(AgentSettings::CurrentModel() == AgentSettings::S_CustomAnthropicModel,
+            "CurrentModel should route to the custom-anthropic model");
+        Assert(AgentSettings::CurrentReasoningEffort() == "",
+            "anthropic-shape providers have no reasoning effort");
+        AgentSettings::S_Provider = previous;
+    }
+
     void Test_SystemPrompt_TracksToolList() {
         Json::Value@ tools = ToolAssembler::GetToolList();
         string toolJson = Json::Write(tools);
@@ -41,8 +77,23 @@ namespace AgentUnitTests {
     void Test_InventoryTools_ArePresent() {
         Json::Value@ tools = ToolAssembler::GetToolList();
         string toolJson = Json::Write(tools);
+        // Builtin inventory surface (always present, no Editor dependency):
         Assert(toolJson.Contains("GetInventorySummary"), "inventory summary tool should be registered");
-        Assert(toolJson.Contains("FindInventory"), "inventory search tool should be registered (tm-control-mcp name)");
+        Assert(toolJson.Contains("BrowseInventoryTree"), "inventory browse tool should be registered");
+        Assert(toolJson.Contains("FindBlockModels"), "block model search tool should be registered");
+        // E++ inventory search now ships in the optional tm-mcp-pack-epp
+        // tool pack (needs Editor). It may legitimately be absent in
+        // headless/unit-test environments, so only assert when the pack
+        // is actually registered.
+        bool packLoaded = false;
+        for (uint i = 0; i < tools.Length; i++) {
+            string name = tools[i].HasKey("name") ? string(tools[i]["name"]) : "";
+            if (name.StartsWith("tm-mcp-pack-epp.")) { packLoaded = true; break; }
+        }
+        if (packLoaded) {
+            Assert(toolJson.Contains("FindInventory"),
+                "inventory search tool should be registered when tm-mcp-pack-epp is loaded");
+        }
     }
 
     void Test_ToolResultSuccess_HandlesNestedMcpOutput() {
@@ -353,6 +404,7 @@ namespace AgentUnitTests {
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
+        RegisterUnitTest("custom providers settings and helpers", Test_CustomProviders_SettingsAndHelpers);
         RegisterUnitTest("system prompt tracks tool list", Test_SystemPrompt_TracksToolList);
         RegisterUnitTest("inventory tools are present", Test_InventoryTools_ArePresent);
         RegisterUnitTest("tool result success handles nested MCP output", Test_ToolResultSuccess_HandlesNestedMcpOutput);
