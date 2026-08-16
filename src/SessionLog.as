@@ -162,6 +162,10 @@ namespace SessionLog {
         WriteRecord("error", message);
     }
 
+    void LogSystem(const string &in message) {
+        WriteRecord("system", message);
+    }
+
     void SetEnabled(bool enabled) { g_Enabled = enabled; }
     bool Enabled() { return g_Enabled; }
     string Path() { return g_Path; }

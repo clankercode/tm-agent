@@ -153,7 +153,7 @@ void AgentLoopCoroutine(ref@ requestRef) {
             SessionLog::LogError("agent loop exception: " + error);
             RecordPendingToolFailures("Agent request aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Agent request failed");
-            AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Agent request failed unexpectedly.");
+            AddErrorMessage("Agent request failed unexpectedly.");
             MarkIdle();
         }
     }
@@ -192,7 +192,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     if (missingConfig) {
         SessionLog::LogError("No valid API key/base URL configured");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "No valid API key configured");
-        AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: No valid API key/base URL configured. Please check your settings.");
+        AddErrorMessage("No valid API key/base URL configured. Please check your settings.");
         MarkIdle();
         return;
     }
@@ -234,7 +234,7 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
     if (resp is null) {
         SessionLog::LogError("Provider returned no response");
         AgentUI::SetStatus(AgentUI::StatusKind::Error, "Provider returned no response");
-        AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Provider returned no response.");
+        AddErrorMessage("Provider returned no response.");
         MarkIdle();
         return;
     }
@@ -255,9 +255,20 @@ void AgentLoopCoroutineImpl(ref@ requestRef) {
         } else {
             errorMsg = Json::Write(errNode);
         }
+        // Auto-recovery: if a text-only model choked on an image part, strip
+        // images from history and disable image sending so the conversation
+        // stays usable (the retry path is clean text).
+        if (LlmHistory::HasImageParts() && LooksLikeImageRejection(errorMsg)) {
+            int stripped = LlmHistory::StripImageParts();
+            AgentSettings::S_SendToolImages = false;
+            string note = "Provider rejected image content; removed " + stripped
+                + " image(s) from history and disabled image sending (Settings → API).";
+            SessionLog::LogError(note);
+            AgentUI::AddMessage(AgentUI::MsgType::System, note);
+        }
         SessionLog::LogError(errorMsg);
         AgentUI::SetStatus(AgentUI::StatusKind::Error, errorMsg);
-        AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: " + errorMsg);
+        AddErrorMessage(errorMsg);
         MarkIdle();
         return;
     }
@@ -315,7 +326,7 @@ void ProcessToolCalls(uint generation) {
             // Responses and Anthropic histories remain structurally valid.
             RecordPendingToolFailures("Tool execution aborted unexpectedly");
             AgentUI::SetStatus(AgentUI::StatusKind::Error, "Tool execution failed");
-            AgentUI::AddMessage(AgentUI::MsgType::Assistant, "Error: Tool execution failed unexpectedly.");
+            AddErrorMessage("Tool execution failed unexpectedly.");
             MarkIdle();
         }
     }
@@ -342,6 +353,28 @@ void RecordToolResult(Json::Value@ toolCall, Json::Value@ actualResult) {
     SessionLog::LogToolResult(name, resultJson);
     AgentUI::AddToolResult(name, resultJson);
     LlmHistory::AddToolResult(toolCallId, name, resultJson);
+    ProcessScreenshotResult(name, actualResult);
+}
+
+// Screenshot post-processing: show the image in the chatlog and (for
+// multimodal models) append an image user message the provider can see.
+// Called after the durable records; failures are non-fatal.
+void ProcessScreenshotResult(const string &in name, Json::Value@ actualResult) {
+    string path = ToolImages::ExtractScreenshotPath(actualResult);
+    if (path.Length == 0) return;
+
+    ToolImages::Entry@ entry = ToolImages::RegisterForChat(path);
+    if (entry !is null && entry.texture !is null) {
+        AgentUI::AttachImageToLastToolResult(path);
+    }
+
+    if (!ToolImages::ShouldSendImageToModel()) return;
+    string base64 = ToolImages::ReadBase64(path);
+    if (base64.Length == 0) return;
+    string caption = "Screenshot result from " + name + " (" + entry.mediaType
+        + "). Describe or reason about what you see; you may take another screenshot if needed.";
+    LlmHistory::AddImageUserMessage(caption, entry.mediaType, base64);
+    SessionLog::LogSystem("image sent to model: " + path);
 }
 
 void RecordPendingToolFailures(const string &in message) {
@@ -488,6 +521,60 @@ void ProcessToolCallsImpl(uint generation) {
     g_State = STATE_AWAITING_LLM;
     AgentUI::IncrementStep();
     startnew(CoroutineFuncUserdata(AgentLoopCoroutine), AgentRunRequest(generation, ""));
+}
+
+// Provider errors that look like "this model can't read images".
+bool LooksLikeImageRejection(const string &in msg) {
+    string m = msg.ToLower();
+    return m.IndexOf("image") >= 0 || m.IndexOf("vision") >= 0 || m.IndexOf("multimodal") >= 0
+        || m.IndexOf("image_url") >= 0 || m.IndexOf("content part") >= 0;
+}
+
+// Best-effort pretty-printing of provider error strings. Many wrap a JSON
+// body after "HTTP <code>: " (OpenAI-style, xAI, gateways); others are JSON
+// objects with {code, error} / {error:{message}} / {message}. Extracts the
+// human-readable fields; falls back to the raw string.
+string FormatProviderError(const string &in raw) {
+    string body = raw;
+    // Strip a leading "HTTP 400: " envelope; keep the code for context.
+    string prefix = "";
+    int colon = body.IndexOf(": ");
+    if (body.StartsWith("HTTP ") && colon > 0) {
+        prefix = body.SubStr(0, colon);  // "HTTP 400"
+        body = body.SubStr(colon + 2);
+        body = body.Trim();
+    }
+    Json::Value@ parsed = Json::Parse(body);
+    if (parsed is null || parsed.GetType() != Json::Type::Object) {
+        return raw;  // not JSON — leave as-is
+    }
+    string code = parsed.HasKey("code") && parsed["code"].GetType() == Json::Type::String
+        ? string(parsed["code"]) : "";
+    string message = "";
+    if (parsed.HasKey("error")) {
+        Json::Value@ err = parsed["error"];
+        if (err.GetType() == Json::Type::String) {
+            message = string(err);
+        } else if (err.GetType() == Json::Type::Object && err.HasKey("message")) {
+            message = string(err["message"]);
+            if (err.HasKey("type") && err["type"].GetType() == Json::Type::String) {
+                message = string(err["type"]) + ": " + message;
+            }
+        }
+    }
+    if (message.Length == 0 && parsed.HasKey("message")) message = string(parsed["message"]);
+    if (message.Length == 0) return raw;
+
+    string result = prefix.Length > 0 ? prefix + " — " : "";
+    if (code.Length > 0) result += "[" + code + "] ";
+    result += message;
+    return result;
+}
+
+void AddErrorMessage(const string &in message) {
+    // Log-before-UI: the durable error record already written by the caller;
+    // this only formats the chat bubble.
+    AgentUI::AddMessage(AgentUI::MsgType::Error, FormatProviderError(message));
 }
 
 bool IsToolResultSuccess(Json::Value@ r) {

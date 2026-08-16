@@ -164,6 +164,7 @@ namespace AgentDriver {
             else if (role == "tool_call") t = AgentUI::MsgType::ToolCall;
             else if (role == "tool_result") t = AgentUI::MsgType::ToolResult;
             else if (role == "system") t = AgentUI::MsgType::System;
+            else if (role == "error") t = AgentUI::MsgType::Error;
             else { resp["ok"] = false; resp["error"] = "unknown role"; return resp; }
             // Driver-injected messages are part of the session too (demo
             // seeding, tests): log before the UI mutation.
@@ -282,6 +283,77 @@ namespace AgentDriver {
             if (!req.HasKey("busy")) { resp["ok"] = false; resp["error"] = "busy (bool) required"; return resp; }
             FollowCam::SetAgentBusy(bool(req["busy"]));
             resp["ok"] = true;
+            return resp;
+        }
+        if (op == "debug_base64") {
+            // Verification: compare plugin base64 encoding against a known-good
+            // reference (newline/MIME handling differs by flag).
+            if (!req.HasKey("path")) { resp["ok"] = false; resp["error"] = "path required"; return resp; }
+            string path = string(req["path"]);
+            if (!IO::FileExists(path)) { resp["ok"] = false; resp["error"] = "no such file"; return resp; }
+            IO::File f(path, IO::FileMode::Read);
+            MemoryBuffer@ buf = f.Read(f.Size());
+            buf.Seek(0);
+            string a = buf.ReadToBase64(buf.GetSize(), false);
+            buf.Seek(0);
+            string b = buf.ReadToBase64(buf.GetSize(), true);
+            resp["ok"] = true;
+            resp["prefixFalse"] = a.SubStr(0, 80);
+            resp["prefixTrue"] = b.SubStr(0, 80);
+            resp["lenFalse"] = a.Length;
+            resp["lenTrue"] = b.Length;
+            resp["hasNewlineFalse"] = a.IndexOf("\n") >= 0;
+            resp["hasNewlineTrue"] = b.IndexOf("\n") >= 0;
+            return resp;
+        }
+        if (op == "set_tool_images") {
+            // Verification: toggle the send-images gate (also used to restore
+            // state after the auto-recovery disables it).
+            if (!req.HasKey("enabled")) { resp["ok"] = false; resp["error"] = "enabled (bool) required"; return resp; }
+            AgentSettings::S_SendToolImages = bool(req["enabled"]);
+            resp["ok"] = true;
+            resp["sendEnabled"] = AgentSettings::S_SendToolImages;
+            return resp;
+        }
+        if (op == "get_msg_layout") {
+            // Verification: per-message expanded/imagePath state.
+            Json::Value@ arr = Json::Array();
+            for (uint i = 0; i < AgentUI::g_Messages.Length; i++) {
+                Json::Value@ m = Json::Object();
+                m["type"] = tostring(int(AgentUI::g_Messages[i].type));
+                m["expanded"] = AgentUI::g_Messages[i].expanded;
+                m["imagePath"] = AgentUI::g_Messages[i].imagePath;
+                arr.Add(m);
+            }
+            resp["ok"] = true;
+            resp["messages"] = arr;
+            return resp;
+        }
+        if (op == "inject_tool_result") {
+            // Verification: run the full screenshot post-processing path for a
+            // synthetic TakeScreenshot-shaped result.
+            if (!req.HasKey("result")) { resp["ok"] = false; resp["error"] = "result (json) required"; return resp; }
+            Json::Value@ result = req["result"];
+            ProcessScreenshotResult("TakeScreenshot", result);
+            resp["ok"] = true;
+            resp["entries"] = int(ToolImages::g_Entries.Length);
+            return resp;
+        }
+        if (op == "get_tool_images") {
+            Json::Value@ arr = Json::Array();
+            for (uint i = 0; i < ToolImages::g_Entries.Length; i++) {
+                Json::Value@ e = Json::Object();
+                e["path"] = ToolImages::g_Entries[i].path;
+                e["mediaType"] = ToolImages::g_Entries[i].mediaType;
+                e["hasTexture"] = ToolImages::g_Entries[i].texture !is null;
+                e["w"] = ToolImages::g_Entries[i].w;
+                e["h"] = ToolImages::g_Entries[i].h;
+                arr.Add(e);
+            }
+            resp["ok"] = true;
+            resp["images"] = arr;
+            resp["sendEnabled"] = AgentSettings::S_SendToolImages;
+            resp["hasImageParts"] = LlmHistory::HasImageParts();
             return resp;
         }
         if (op == "set_follow_mode") {

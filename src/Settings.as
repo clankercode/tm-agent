@@ -46,6 +46,9 @@ namespace AgentSettings {
     [Setting category="API" name="Provider"]
     Provider S_Provider = Provider::MiniMax;
 
+    [Setting category="API" name="Send Tool Images to Model" description="When the agent takes a screenshot, also send the image to the model (multimodal models only; auto-disables if the provider rejects images)"]
+    bool S_SendToolImages = true;
+
     [Setting category="General" name="Max History Tokens" description="Context window budget" min="16000" max="1000000"]
     int S_MaxHistoryTokens = 500000;
 

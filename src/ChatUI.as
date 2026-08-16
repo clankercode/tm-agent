@@ -89,7 +89,7 @@ namespace AgentUI {
     vec4 g_TestColor = vec4(0.48, 0.52, 0.58, 1.0);
     bool g_TestRunning = false;
 
-    enum MsgType { User, Assistant, ToolCall, ToolResult, System }
+    enum MsgType { User, Assistant, ToolCall, ToolResult, System, Error }
 
     class Message {
         MsgType type;
@@ -97,6 +97,7 @@ namespace AgentUI {
         string toolName;
         string toolResult;
         bool expanded;
+        string imagePath;   // screenshot shown inside a ToolResult chip
 
         // Layout cache — filled on first draw, invalidated when width or
         // expanded state changes. Used by the virtual-scroll cull path.
@@ -812,13 +813,50 @@ namespace AgentUI {
         UI::Dummy(vec2(0, 5));
     }
 
-    // Follow-cam mode pills: [follow: off/steps/swing/cine]. Compact, right
-    // of the status area, highlighted when active. Click cycles.
+    // Segmented button group, right-aligned in the current window. Returns the
+    // clicked segment index, or -1. Segment IDs are uniquified (tag + index):
+    // duplicate ##-ids make ImGui collapse hit boxes onto the first item.
+    // prefixIcon (e.g. Icons::VideoCamera, or "" for none) is drawn before the
+    // segments as a non-interactive label.
+    int DrawButtonGroup(const string &in tag, string[] &in labels, int active, const string &in prefixIcon) {
+        float iconW = prefixIcon.Length > 0 ? UI::MeasureString(prefixIcon).x + 6 : 0;
+        float rowW = iconW;
+        for (uint i = 0; i < labels.Length; i++) {
+            rowW += UI::MeasureString(labels[i]).x + 14 /* item pad */ + 4 /* spacing */;
+        }
+        float rightEdge = UI::GetWindowSize().x - 12;
+        UI::SetCursorPosX(Math::Max(8.0, rightEdge - rowW));
+        UI::AlignTextToFramePadding();
+
+        if (prefixIcon.Length > 0) {
+            UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
+            UI::Text(prefixIcon);
+            UI::PopStyleColor();
+        }
+
+        int clicked = -1;
+        for (uint i = 0; i < labels.Length; i++) {
+            if (i > 0) UI::SameLine(0, 4);
+            else if (prefixIcon.Length > 0) UI::SameLine(0, 6);
+            bool isActive = int(i) == active;
+            if (isActive) {
+                UI::PushStyleColor(UI::Col::Text, vec4(0.00, 0.82, 0.95, 1.0));
+            } else {
+                UI::PushStyleColor(UI::Col::Text, vec4(0.42, 0.46, 0.52, 0.9));
+            }
+            if (UI::Selectable(labels[i] + "##" + tag + tostring(i), isActive)) {
+                clicked = int(i);
+            }
+            UI::PopStyleColor();
+        }
+        return clicked;
+    }
+
+    // Follow-cam mode pills: [icon off steps swing cine] on their own header
+    // row via the shared button-group helper, right-aligned so all four are
+    // always visible and clickable.
     void DrawFollowCamSelector() {
         if (!AgentSettings::S_FollowCamEnabled) return;
-
-        UI::SameLine();
-        UI::AlignTextToFramePadding();
 
         FollowCam::FollowMode[] order = {
             FollowCam::FollowMode::Off,
@@ -827,24 +865,10 @@ namespace AgentUI {
             FollowCam::FollowMode::Cinematic
         };
         string[] labels = { "off", "steps", "swing", "cine" };
-
-        UI::PushStyleColor(UI::Col::Text, vec4(0.55, 0.60, 0.68, 1.0));
-        UI::Text(Icons::VideoCamera);
-        UI::PopStyleColor();
-
-        for (uint i = 0; i < order.Length; i++) {
-            UI::SameLine(0, 4);
-            bool active = FollowCam::g_Mode == order[i];
-            if (active) {
-                UI::PushStyleColor(UI::Col::Text, vec4(0.00, 0.82, 0.95, 1.0));
-            } else {
-                UI::PushStyleColor(UI::Col::Text, vec4(0.42, 0.46, 0.52, 0.9));
-            }
-            if (UI::Selectable(labels[i] + "##followmode", active)) {
-                FollowCam::SetMode(order[i]);
-                AgentSettings::S_FollowCamMode = FollowCam::ModeToString(order[i]);
-            }
-            UI::PopStyleColor();
+        int clicked = DrawButtonGroup("followmode", labels, int(FollowCam::g_Mode), Icons::VideoCamera);
+        if (clicked >= 0) {
+            FollowCam::SetMode(order[clicked]);
+            AgentSettings::S_FollowCamMode = FollowCam::ModeToString(order[clicked]);
         }
         if (UI::IsItemHovered()) {
             UI::SetTooltip("Follow cam — moves the camera to watch the agent while it works");
@@ -1063,6 +1087,10 @@ namespace AgentUI {
             DrawBubble("YOU", userAccent, msg.content);
         } else if (msg.type == MsgType::Assistant) {
             DrawBubble("AGENT", agentAccent, msg.content, true);
+        } else if (msg.type == MsgType::Error) {
+            // Provider/tool errors: distinct red bubble so failures never read
+            // as normal chat output.
+            DrawBubble(Icons::ExclamationTriangle + "  ERROR", toolErrAccent, msg.content, false);
         } else if (msg.type == MsgType::ToolCall) {
             // "↗ ToolName" reads as "outgoing call" at a glance.
             string label = Icons::ArrowRight + "  " + msg.toolName;
@@ -1201,6 +1229,38 @@ namespace AgentUI {
             vec4 peekCol = vec4(0.55, 0.60, 0.68, 0.90);
             vec2 pSize = UI::MeasureString(peek);
             dl.AddText(vec2(tx, midY - pSize.y * 0.5), peekCol, peek);
+
+            // Collapsed screenshot chip: still show the image — a thumbnail
+            // (70% width) below the header row; hovering it pops a large
+            // preview overlay. Falls back to nothing when no texture.
+            if (msg.imagePath.Length > 0) {
+                ToolImages::Entry@ img = ToolImages::FindEntry(msg.imagePath);
+                if (img !is null && img.texture !is null) {
+                    float maxW = UI::GetContentRegionAvail().x * 0.70;
+                    float scale = maxW / float(img.w);
+                    vec2 sz = vec2(float(img.w) * scale, float(img.h) * scale);
+                    // Layout: thumbnail starts below the header row.
+                    vec2 tp = UI::GetCursorPos();
+                    UI::Dummy(sz + vec2(0, 4));
+                    vec2 tabs = UI::GetWindowPos() + tp - vec2(UI::GetScrollX(), UI::GetScrollY());
+                    dl.AddImage(img.texture, tabs, sz);
+                    vec4 thumbRect = vec4(tabs, sz);
+                    dl.AddRect(thumbRect, vec4(accent.x, accent.y, accent.z, 0.45), 4, 6);
+                    bool thumbHover = UI::IsItemHovered();
+                    if (thumbHover) {
+                        UI::SetTooltip("click to expand the full result");
+                        // Large preview overlay centered on the window.
+                        float bigMaxW = UI::GetWindowSize().x - 40;
+                        float bigScale = Math::Min(bigMaxW / float(img.w), 520.0 / float(img.h));
+                        vec2 big = vec2(float(img.w) * bigScale, float(img.h) * bigScale);
+                        vec2 wp = UI::GetWindowPos() + (UI::GetWindowSize() - big) * 0.5;
+                        // Draw AFTER the window so it overlays the chat.
+                        auto fdl = UI::GetForegroundDrawList();
+                        fdl.AddImage(img.texture, wp, big);
+                        fdl.AddRect(vec4(wp, big), vec4(0, 0, 0, 0.8), 6, 8);
+                    }
+                }
+            }
         }
 
         UI::PopFont();
@@ -1224,6 +1284,29 @@ namespace AgentUI {
             UI::PopStyleColor();
             UI::PopFont();
             UI::Unindent(padX + 10);
+
+            // Screenshot: draw the captured image below the JSON body.
+            // Aspect-correct, capped height; rounded rect border ties it to
+            // the chip family. Falls back to a note when the texture is
+            // missing (capped cache / load failure).
+            if (msg.imagePath.Length > 0) {
+                UI::Indent(padX + 10);
+                ToolImages::Entry@ img = ToolImages::FindEntry(msg.imagePath);
+                if (img !is null && img.texture !is null) {
+                    float maxH = 320.0;
+                    float maxW = UI::GetContentRegionAvail().x;
+                    float scale = Math::Min(maxW / float(img.w), maxH / float(img.h));
+                    vec2 sz = vec2(float(img.w) * scale, float(img.h) * scale);
+                    vec2 p = UI::GetCursorPos();
+                    UI::Dummy(sz + vec2(0, 2));
+                    vec2 abs = UI::GetWindowPos() + p - vec2(UI::GetScrollX(), UI::GetScrollY());
+                    dl.AddImage(img.texture, abs, sz);
+                    dl.AddRect(vec4(abs, sz), vec4(accent.x, accent.y, accent.z, 0.45), 4, 6);
+                } else {
+                    UI::TextDisabled("image: " + msg.imagePath);
+                }
+                UI::Unindent(padX + 10);
+            }
 
             vec2 expEnd = UI::GetCursorPos();
             float expEndY = UI::GetWindowPos().y + expEnd.y - UI::GetScrollY();
@@ -1661,6 +1744,18 @@ namespace AgentUI {
         msg.toolName = toolName;
         g_Messages.InsertLast(msg);
         g_PendingScrollBottom = true;
+    }
+
+    // Screenshot attach: the most recent ToolResult chip renders the image.
+    // (Called right after AddToolResult by the screenshot post-processing.)
+    void AttachImageToLastToolResult(const string &in path) {
+        for (int i = int(g_Messages.Length) - 1; i >= 0; i--) {
+            if (g_Messages[i].type == MsgType::ToolResult) {
+                g_Messages[i].imagePath = path;
+                g_Messages[i].InvalidateLayout();
+                return;
+            }
+        }
     }
 
     // Callers pass StatusKind + optional description. The one overload that

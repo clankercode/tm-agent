@@ -6,6 +6,12 @@ namespace AgentUnitTests {
         }
     }
 
+    void Assert_EqStr(const string &in actual, const string &in expected, const string &in message) {
+        if (actual != expected) {
+            throw("Assert failed: " + message + " — expected \"" + expected + "\", got \"" + actual + "\"");
+        }
+    }
+
     string RepeatText(const string &in text, int count) {
         string result = "";
         for (int i = 0; i < count; i++) {
@@ -602,6 +608,94 @@ namespace AgentUnitTests {
         throw("no llm_exchange record found");
     }
 
+    // --- ToolImages (multimodal screenshot support) ----------------------------
+
+    void Test_ToolImages_ExtractScreenshotPath() {
+        // Success shape: TakeScreenshot output with fullName + size.
+        Json::Value@ ok = Json::Parse('{"ok":true,"output":{"fullName":"/x/shot.jpg","size":1234}}');
+        string path = ToolImages::ExtractScreenshotPath(ok);
+        Assert_EqStr(path, "/x/shot.jpg", "nested output.fullName");
+
+        // Flat shape tolerated too.
+        Json::Value@ flat = Json::Parse('{"fullName":"/y/shot.jpg","size":10}');
+        Assert_EqStr(ToolImages::ExtractScreenshotPath(flat), "/y/shot.jpg", "flat fullName");
+
+        // Non-screenshot tools / errors return empty.
+        Assert_EqStr(ToolImages::ExtractScreenshotPath(Json::Parse('{"error":"no"}')), "", "error shape");
+        Assert_EqStr(ToolImages::ExtractScreenshotPath(null), "", "null");
+    }
+
+    void Test_ToolImages_ImageUserMessageShape() {
+        Json::Value@ msg = ToolImages::BuildImageUserMessage("TakeScreenshot result", "jpeg", "aGVsbG8=");
+        // OpenAI chat-completions vision shape: content array with text + image_url data URL.
+        Assert(msg !is null && msg.HasKey("role") && string(msg["role"]) == "user", "role");
+        Assert(msg["content"].GetType() == Json::Type::Array, "content is array");
+        Assert(msg["content"].Length == 2, "two parts");
+        Assert(string(msg["content"][0]["type"]) == "text", "first part text");
+        Assert(string(msg["content"][1]["type"]) == "image_url", "second part image_url");
+        Assert(string(msg["content"][1]["image_url"]["url"]) == "data:image/jpeg;base64,aGVsbG8=", "data url");
+        Assert(msg.HasKey("image_part"), "bookkeeping flag");
+    }
+
+    void Test_ToolImages_ImageTokensNotCountedAsBytes() {
+        // The data URL must not be counted as raw tokens (a 400KB base64
+        // image would otherwise consume ~100k of the context ceiling while
+        // the real vision cost is a flat per-image allowance). 64KB payload:
+        // naive token estimate far exceeds text + flat allowance.
+        string big = "";
+        for (int i = 0; i < 4000; i++) big += "QUFBQUFBQUFBQUFB";  // 64000 chars
+        Json::Value@ msg = ToolImages::BuildImageUserMessage("caption", "jpeg", big);
+        int adjusted = LlmHistory::CountMessageTokensAdjusted(msg);
+        int naive = LlmHistory::CountMessageTokens(msg);
+        Assert(adjusted < naive / 2, "adjusted well below naive (adjusted=" + adjusted + " naive=" + naive + ")");
+        Assert(adjusted >= ToolImages::IMAGE_TOKEN_ALLOWANCE, "flat image allowance present");
+    }
+
+    void Test_ToolImages_AnthropicImageConversion() {
+        // History image user message -> Anthropic content blocks (text + image
+        // source). Editor-state prefix may or may not be present in tests;
+        // assert on the LAST converted message.
+        LlmHistory::ClearHistory();
+        LlmHistory::AddUserMessage("hello");
+        LlmHistory::AddImageUserMessage("caption", "jpeg", "aGVsbG8=");
+        string system;
+        Json::Value@ msgs = LlmHistory::GetMessagesForAnthropic(Json::Array(), system, " ");
+        Assert(msgs.Length >= 2, "at least two messages (got " + msgs.Length + ")");
+        Json::Value@ last = msgs[msgs.Length - 1];
+        Assert(last["content"].GetType() == Json::Type::Array, "image msg content array");
+        bool hasImage = false;
+        for (uint i = 0; i < last["content"].Length; i++) {
+            if (string(last["content"][i]["type"]) == "image") hasImage = true;
+        }
+        Assert(hasImage, "image block present");
+        Assert(string(last["content"][last["content"].Length - 1]["source"]["data"]) == "aGVsbG8=", "base64 in source");
+    }
+
+    void Test_ToolImages_StripImagesRecoversHistory() {
+        LlmHistory::ClearHistory();
+        LlmHistory::AddUserMessage("hello");
+        LlmHistory::AddImageUserMessage("caption", "jpeg", "aGVsbG8=");
+        LlmHistory::AddUserMessage("bye");
+        string sysOut;
+        Json::Value@ before = LlmHistory::GetMessagesForAnthropic(Json::Array(), sysOut, " ");
+        int removed = LlmHistory::StripImageParts();
+        Assert(removed == 1, "one image message downgraded");
+        Json::Value@ after = LlmHistory::GetMessagesForAnthropic(Json::Array(), sysOut, " ");
+        Assert(after.Length == before.Length, "message count unchanged");
+        Json::Value@ last = after[after.Length - 2];  // the downgraded image message
+        Assert(last["content"].GetType() == Json::Type::String, "downgraded to text");
+        Assert(string(last["content"]).IndexOf("image removed") >= 0, "downgrade note present");
+    }
+
+    void Test_ToolImages_ModelImageGateMatchesSetting() {
+        bool saved = AgentSettings::S_SendToolImages;
+        AgentSettings::S_SendToolImages = false;
+        Assert(!ToolImages::ShouldSendImageToModel(), "off gate");
+        AgentSettings::S_SendToolImages = true;
+        Assert(ToolImages::ShouldSendImageToModel(), "on gate");
+        AgentSettings::S_SendToolImages = saved;
+    }
+
     void RegisterAll() {
         RegisterUnitTest("openai defaults stay expected", Test_OpenAISettings_AreExpected);
         RegisterUnitTest("provider enum assigns cleanly", Test_ProviderEnum_AssignsCleanly);
@@ -630,6 +724,12 @@ namespace AgentUnitTests {
         RegisterUnitTest("follow cam activity while busy", Test_FollowCam_ActivityBusDoorIsOpenWhileAgentWorks);
         RegisterUnitTest("tool focus world tools pass through", Test_ToolFocus_WorldToolsPassThrough);
         RegisterUnitTest("tool focus non-focusable tools", Test_ToolFocus_NonFocusableTools);
+        RegisterUnitTest("tool images extract screenshot path", Test_ToolImages_ExtractScreenshotPath);
+        RegisterUnitTest("tool images image user message shape", Test_ToolImages_ImageUserMessageShape);
+        RegisterUnitTest("tool images image tokens not counted as bytes", Test_ToolImages_ImageTokensNotCountedAsBytes);
+        RegisterUnitTest("tool images anthropic image conversion", Test_ToolImages_AnthropicImageConversion);
+        RegisterUnitTest("tool images strip images recovers history", Test_ToolImages_StripImagesRecoversHistory);
+        RegisterUnitTest("tool images model image gate matches setting", Test_ToolImages_ModelImageGateMatchesSetting);
     }
 
     bool unitTestsRegistered = runAsync(RegisterAll);
