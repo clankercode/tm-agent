@@ -46,41 +46,4 @@ namespace StartupSuggestion {
             + "Start with step 1 now; keep each island under ~25 blocks so the samples"
             + " stay quick.";
     }
-
-    void Draw(bool mapHasRoute) {
-        if (!ShouldShow()) return;
-        vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
-        auto dl = UI::GetWindowDrawList();
-
-        UI::Dummy(vec2(0, 4));
-        vec2 rowPos = UI::GetCursorPos();
-        float w = UI::GetWindowContentRegionWidth();
-        float rowH = 30;
-
-        // Tight pill row: label + try button, right-aligned like the follow pills.
-        string labelText = "Try:";
-        vec2 labelSz = UI::MeasureString(labelText);
-        string btnLabel = ButtonLabel(mapHasRoute);
-        vec2 btnSz = UI::MeasureString(btnLabel) + vec2(18, 8);
-
-        UI::Dummy(vec2(w, rowH));
-        vec2 abs = UI::GetWindowPos() + rowPos - vec2(UI::GetScrollX(), UI::GetScrollY());
-        float labelX = w - labelSz.x - btnSz.x - 14 - 8;
-        dl.AddText(vec2(abs.x + labelX, abs.y + (rowH - labelSz.y) * 0.5), vec4(0.40, 0.44, 0.50, 1.0), labelText);
-
-        // Try button: manual hit-rect (full-height Dummy hover region, same
-        // proven pattern as the follow pills).
-        vec2 btnPos = vec2(abs.x + w - btnSz.x - 4, abs.y + (rowH - btnSz.y) * 0.5);
-        UI::SetCursorPos(rowPos + vec2(w - btnSz.x - 4, 0));
-        UI::Dummy(btnSz);
-        vec4 btnRect = vec4(btnPos.x, btnPos.y, btnSz.x, btnSz.y);
-        dl.AddRectFilled(btnRect, vec4(accent.x, accent.y, accent.z, 0.16), 4);
-        dl.AddRect(btnRect, vec4(accent.x, accent.y, accent.z, 0.55), 4);
-        dl.AddText(vec2(btnRect.x + (btnSz.x - UI::MeasureString(btnLabel).x) * 0.5, btnRect.y + 4), vec4(0.85, 0.97, 1.00, 1.0), btnLabel);
-        UI::SetCursorPos(rowPos + vec2(0, rowH));
-        if (UI::IsItemHovered() && UI::IsMouseClicked(UI::MouseButton::Left)) {
-            AgentUI::g_InputText = ComposerPrompt(mapHasRoute);
-            g_Dismissed = true;
-        }
-    }
 }

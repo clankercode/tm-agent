@@ -1243,14 +1243,6 @@ namespace AgentUI {
         UI::TextDisabled(s.allowFreeText ? "or type a reply below" : "");
     }
 
-    bool SmallButton(const string &in label, const string &in tooltip = "") {
-        UI::PushStyleVar(UI::StyleVar::FramePadding, vec2(2, 0));
-        bool ret = UI::Button(label);
-        UI::PopStyleVar();
-        if (tooltip.Length > 0 && UI::IsItemHovered()) UI::SetTooltip(tooltip);
-        return ret;
-    }
-
     void DrawActionGroups(Interactive::Card@ card) {
         vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
         if (card.actionsTitle.Length > 0) UI::TextWrapped(card.actionsTitle);
@@ -1261,20 +1253,22 @@ namespace AgentUI {
             UI::Text(g.label);
             UI::SameLine();
             if (g.hasView) {
-                if (SmallButton(Icons::Eye + " view##v", "Look at this group")) {
+                if (UI::Button(Icons::Eye + " view##v")) {
                     ToolFocus::FocusOnPos(g.viewPos);
                     ToolFocus::MoveCursorToWorld(g.viewPos);
                 }
+                if (UI::IsItemHovered()) UI::SetTooltip("Look at this group");
                 UI::SameLine();
             }
             if (g.continuePrompt.Length > 0) {
-                if (SmallButton("continue##c", g.continuePrompt)) {
+                if (UI::Button("continue##c")) {
                     if (::g_State == STATE_IDLE) {
                         SendMessage(g.continuePrompt);
                     } else {
                         g_InputText = g.continuePrompt;
                     }
                 }
+                if (UI::IsItemHovered()) UI::SetTooltip(g.continuePrompt);
             }
             UI::PopID();
         }
