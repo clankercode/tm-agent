@@ -1502,12 +1502,12 @@ namespace AgentUI {
 
             DrawSectionHeader("CONTEXT", Icons::Database);
             AgentSettings::S_MaxHistoryTokens = UI::SliderInt(
-                "Max History Tokens", AgentSettings::S_MaxHistoryTokens, 16000, 200000, "%d tok"
+                "Max History Tokens", AgentSettings::S_MaxHistoryTokens, 16000, 1000000, "%d tok"
             );
             if (UI::IsItemHovered()) UI::SetTooltip("Hard ceiling — older messages get compacted above this.");
 
             AgentSettings::S_CompactButtonThreshold = UI::SliderInt(
-                "Compact Button At", AgentSettings::S_CompactButtonThreshold, 4000, 200000, "%d tok"
+                "Compact Button At", AgentSettings::S_CompactButtonThreshold, 4000, 1000000, "%d tok"
             );
             if (UI::IsItemHovered()) UI::SetTooltip("Compact button appears in the toolbar once used context crosses this.");
 

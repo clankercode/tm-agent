@@ -74,7 +74,7 @@ void ApplyModelMetaToSettings() {
     if (!meta.known) return;
 
     if (meta.contextTokens > 0) {
-        int budget = int(Math::Min(int64(meta.contextTokens), int64(200000)));
+        int budget = int(Math::Min(int64(meta.contextTokens), int64(1000000)));
         AgentSettings::S_MaxHistoryTokens = budget;
     }
     if (meta.reasoning) {
