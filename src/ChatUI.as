@@ -17,6 +17,10 @@ namespace AgentUI {
     string g_InputText = "";
     int g_CurrentTurn = 0;
     int g_StepCount = 0;
+    // DEV/UNITTEST-only: when >= 0, DrawMessages reports this as the child's
+    // scroll position instead of the real one, letting tests force culling
+    // conditions (tail cull = the crash repro) without real scroll input.
+    float g_ForceScrollY = -1.0;
     // Status state — enum + optional description, only mutated atomically via
     // `Status.Set(kind, desc)`. A string "Error: foo" can't get passed around
     // and mis-parsed anymore; callers pass StatusKind::Error + "foo" explicitly.
@@ -824,9 +828,10 @@ namespace AgentUI {
             // Virtual-scroll cull. ListClipper wants uniform row height;
             // our messages have wildly variable heights (markdown wrap,
             // expanded JSON, compact chips) so we roll our own: cache each
-            // message's measured advance, then on later frames skip the
-            // full draw and emit SetCursorPos to preserve scroll layout.
-            float scrollY = UI::GetScrollY();
+            // message's measured advance, then on later frames advance the
+            // message's measured advance, then on later frames advance the
+            // cursor with a zero-width Dummy sized to the cached height.
+            float scrollY = g_ForceScrollY >= 0 ? g_ForceScrollY : UI::GetScrollY();
             float viewH = UI::GetWindowSize().y;
             // One viewport of over-render above/below smooths fast scrolls
             // and keeps near-edge items ready to receive clicks.
@@ -858,8 +863,19 @@ namespace AgentUI {
                 if (offScreen) {
                     // Reproduce the exact cursor advance without invoking
                     // any layout or drawlist work for this message.
-                    vec2 pos = UI::GetCursorPos();
-                    UI::SetCursorPos(vec2(pos.x, preY + msg.cachedHeight));
+                    // A bare SetCursorPos here trips ImGui's
+                    // ErrorCheckUsingSetCursorPosToExtendParentBoundaries
+                    // assert at EndChild when the culled tail extends the
+                    // child's content bounds with no item submitted after
+                    // it (crash observed 2026-08-16, log line 19533).
+                    // Dummy submits an item (clears DC.IsSetPos) and
+                    // advances h + ItemSpacing.y, so we size it to land
+                    // exactly where the draw path leaves the cursor.
+                    vec2 spacing = UI::GetStyleVarVec2(UI::StyleVar::ItemSpacing);
+                    float advance = msg.cachedHeight > spacing.y
+                        ? msg.cachedHeight - spacing.y
+                        : 0;
+                    UI::Dummy(vec2(0, advance));
                 } else {
                     if (tightBottom) UI::PushStyleVar(UI::StyleVar::ItemSpacing, vec2(UI::GetStyleVarVec2(UI::StyleVar::ItemSpacing).x, 0));
                     DrawMessage(msg, tightTop, tightBottom);

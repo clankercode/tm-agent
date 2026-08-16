@@ -254,6 +254,15 @@ namespace AgentDriver {
             return resp;
         }
 
+        if (op == "set_scroll_sim") {
+            // Crash-repro harness: simulate a scroll position to force cull
+            // conditions in DrawMessages without real input. -1 = real.
+            AgentUI::g_ForceScrollY = req.HasKey("value") ? float(req["value"]) : -1.0;
+            resp["ok"] = true;
+            resp["forced"] = AgentUI::g_ForceScrollY;
+            return resp;
+        }
+
         resp["ok"] = false;
         resp["error"] = "unknown op: " + op;
         return resp;

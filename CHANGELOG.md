@@ -6,6 +6,10 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Crash when scrolling the chat history up: the virtual-scroll cull path advanced the cursor with a bare `SetCursorPos`, tripping ImGui's `ErrorCheckUsingSetCursorPosToExtendParentBoundaries` assertion at `EndChild` whenever the newest messages were off-screen. The cull advance now submits a `Dummy` sized to the cached row height (ChatUI.as `DrawMessages`).
+
 ## [0.2.0] - 2026-08-12
 
 ### Changed
