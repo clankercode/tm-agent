@@ -854,11 +854,15 @@ namespace AgentUI {
             // row). Dummy() reserves exactly the label width; hover/click are
             // read from the item state like the eye button does.
             vec2 labelSz = UI::MeasureString(labels[i]);
-            UI::Dummy(vec2(labelSz.x + 10, 0));
+            float rowH = UI::GetFrameHeight();
+            // Height matters: a zero-height Dummy has an empty hit rect and
+            // IsItemHovered never fires (the drawn text still rendered, which
+            // is why the pills looked fine but ignored clicks).
+            UI::Dummy(vec2(labelSz.x + 10, rowH));
             bool hover = UI::IsItemHovered();
             if (hover && UI::IsMouseClicked(UI::MouseButton::Left)) clicked = int(i);
             vec4 itemRect = UI::GetItemRect();
-            vec4 hitRect = vec4(itemRect.x, itemRect.y, labelSz.x + 10, UI::GetFrameHeight());
+            vec4 hitRect = vec4(itemRect.x, itemRect.y, labelSz.x + 10, rowH);
             if (rectsOut !is null) {
                 Json::Value@ e = Json::Object();
                 e["i"] = int(i);
