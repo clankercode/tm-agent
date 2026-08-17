@@ -37,7 +37,8 @@ namespace FollowCam {
         Cinematic = 3
     }
 
-    // Persisted selection (see Settings S_FollowCamMode). Swing is the
+    // Persisted mode (see Settings S_FollowCamMode, hidden — the chat-header
+    // pills are the UI; the setting is the backing store). Swing is the
     // default: it satisfies "automatically on" while staying pleasant.
     FollowMode g_Mode = FollowMode::Swing;
 

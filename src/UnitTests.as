@@ -423,6 +423,29 @@ namespace AgentUnitTests {
         Assert(FollowCam::ParseMode("") == FollowCam::FollowMode::Off, "empty -> Off");
     }
 
+    void Test_FollowCam_ModeSelectionPersistsToSetting() {
+        // ChatUI pill clicks must write the hidden S_FollowCamMode backing
+        // store, otherwise the mode resets to the default on plugin reload.
+        // This mirrors the click handler in ChatUI (followmode button group).
+        string snap = AgentSettings::S_FollowCamMode;
+        array<FollowCam::FollowMode> order = {
+            FollowCam::FollowMode::Off,
+            FollowCam::FollowMode::Steps,
+            FollowCam::FollowMode::Swing,
+            FollowCam::FollowMode::Cinematic
+        };
+        for (uint i = 0; i < order.Length; i++) {
+            FollowCam::SetMode(order[i]);
+            AgentSettings::S_FollowCamMode = FollowCam::ModeToString(order[i]);
+            Assert(AgentSettings::S_FollowCamMode == FollowCam::ModeToString(order[i]),
+                "click persists mode to setting: " + FollowCam::ModeToString(order[i]));
+            Assert(FollowCam::ParseMode(AgentSettings::S_FollowCamMode) == order[i],
+                "setting survives reload round-trip: " + AgentSettings::S_FollowCamMode);
+        }
+        AgentSettings::S_FollowCamMode = snap;
+        FollowCam::SetMode(FollowCam::ParseMode(snap));
+    }
+
     void Test_FollowCam_DeadbandAcceptsOrDefers() {
         FollowCam::ResetForTest();
         // First activity primes the goal without a move.
@@ -984,6 +1007,7 @@ namespace AgentUnitTests {
         RegisterUnitTest("session log llm exchange carries usage", Test_SessionLog_LlmExchangeCarriesUsage);
         RegisterUnitTest("tool focus grid tools convert coords", Test_ToolFocus_GridToolsConvertCoords);
         RegisterUnitTest("follow cam mode parse", Test_FollowCam_ModeParseAndPersistence);
+        RegisterUnitTest("follow cam mode persists to setting", Test_FollowCam_ModeSelectionPersistsToSetting);
         RegisterUnitTest("follow cam deadband", Test_FollowCam_DeadbandAcceptsOrDefers);
         RegisterUnitTest("follow cam swing angles", Test_FollowCam_SwingAngles);
         RegisterUnitTest("follow cam swing h does not snap", Test_FollowCam_SwingHDoesNotSnapDirection);
