@@ -856,6 +856,46 @@ namespace AgentUnitTests {
         AgentStats::S_TotalCacheWriteTokens = snapCacheWrite;
     }
 
+    void Test_LifetimeStats_ResetAllZeroesEverything() {
+        // The Stats settings tab's confirm-reset must zero every persisted
+        // lifetime counter (snapshot/restore convention: no finally in AS).
+        int snapIn = AgentStats::S_TotalInputTokens;
+        int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
+        int snapCacheWrite = AgentStats::S_TotalCacheWriteTokens;
+        int snapOut = AgentStats::S_TotalOutputTokens;
+        int snapMsgs = AgentStats::S_TotalUserMessages;
+        int snapTurns = AgentStats::S_TotalTurns;
+        int snapSteps = AgentStats::S_TotalSteps;
+        int snapPlaced = AgentStats::S_TotalBlocksPlaced;
+        int snapRemoved = AgentStats::S_TotalBlocksRemoved;
+
+        AgentStats::RecordTokens(100, 20, 80, 10);
+        AgentStats::RecordUserMessage();
+        AgentStats::RecordStep();
+        AgentStats::RecordBlockPlaced();
+        AgentStats::RecordBlockRemoved();
+        AgentStats::ResetAll();
+        Assert(AgentStats::S_TotalInputTokens == 0, "reset zeroes input tokens");
+        Assert(AgentStats::S_TotalCachedReadTokens == 0, "reset zeroes cached read");
+        Assert(AgentStats::S_TotalCacheWriteTokens == 0, "reset zeroes cache write");
+        Assert(AgentStats::S_TotalOutputTokens == 0, "reset zeroes output tokens");
+        Assert(AgentStats::S_TotalUserMessages == 0, "reset zeroes user messages");
+        Assert(AgentStats::S_TotalTurns == 0, "reset zeroes turns");
+        Assert(AgentStats::S_TotalSteps == 0, "reset zeroes steps");
+        Assert(AgentStats::S_TotalBlocksPlaced == 0, "reset zeroes blocks placed");
+        Assert(AgentStats::S_TotalBlocksRemoved == 0, "reset zeroes blocks removed");
+
+        AgentStats::S_TotalInputTokens = snapIn;
+        AgentStats::S_TotalCachedReadTokens = snapCachedRead;
+        AgentStats::S_TotalCacheWriteTokens = snapCacheWrite;
+        AgentStats::S_TotalOutputTokens = snapOut;
+        AgentStats::S_TotalUserMessages = snapMsgs;
+        AgentStats::S_TotalTurns = snapTurns;
+        AgentStats::S_TotalSteps = snapSteps;
+        AgentStats::S_TotalBlocksPlaced = snapPlaced;
+        AgentStats::S_TotalBlocksRemoved = snapRemoved;
+    }
+
     void Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit() {
         int snapIn = AgentStats::S_TotalInputTokens;
         int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
@@ -1028,6 +1068,7 @@ namespace AgentUnitTests {
         RegisterUnitTest("tool focus query tools extract center", Test_ToolFocus_QueryToolsExtractCenter);
         RegisterUnitTest("tool focus location result pos extracts", Test_ToolFocus_LocationResultPosExtracts);
         RegisterUnitTest("lifetime stats cached input accumulates", Test_LifetimeStats_CachedInputAccumulates);
+        RegisterUnitTest("lifetime stats reset all zeroes everything", Test_LifetimeStats_ResetAllZeroesEverything);
         RegisterUnitTest("lifetime stats update token stats feeds cache split", Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit);
         RegisterUnitTest("startup suggestion prompt variants", Test_StartupSuggestion_PromptVariants);
         RegisterUnitTest("startup suggestion should show", Test_StartupSuggestion_ShouldShow);

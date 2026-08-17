@@ -1811,6 +1811,18 @@ namespace AgentUI {
         AiApi::ModelsDevRefreshIfNeeded();
     }
 
+    enum SettingsTab {
+        General = 0,
+        Stats = 1
+    }
+
+    // Which settings tab is showing. Runtime-only (not persisted): the
+    // window always opens on General.
+    SettingsTab g_SettingsTab = SettingsTab::General;
+    // One-frame latch: the user must release and re-click Reset before it
+    // fires (guards against accidental wipes of persisted lifetime stats).
+    bool g_StatsResetArmed = false;
+
     void RenderSettingsWindow() {
         PushTheme();
         UI::SetNextWindowSize(420, 0, UI::Cond::FirstUseEver);
@@ -1820,6 +1832,41 @@ namespace AgentUI {
             g_SettingsPos = UI::GetWindowPos();
             g_SettingsSize = UI::GetWindowSize();
             DrawAmberTitleAccent();
+
+            array<string> tabLabels = {"General", "Stats"};
+            int tabClicked = DrawButtonGroup("settingstabs", tabLabels, int(g_SettingsTab), "");
+            if (tabClicked >= 0) {
+                g_SettingsTab = (tabClicked == 1) ? SettingsTab::Stats : SettingsTab::General;
+                // Leaving the tab disarms the reset latch.
+                if (g_SettingsTab != SettingsTab::Stats) g_StatsResetArmed = false;
+            }
+            UI::Dummy(vec2(0, 4));
+
+            if (g_SettingsTab == SettingsTab::Stats) {
+                RenderStatsTab();
+            } else {
+                RenderGeneralTab();
+            }
+
+            UI::Dummy(vec2(0, 6));
+            UI::Separator();
+            UI::Dummy(vec2(0, 4));
+
+            // Right-align the close button so it anchors the window corner.
+            float closeW = UI::MeasureString(Icons::Times + "  Close").x + 20;
+            UI::SetCursorPosX(UI::GetWindowSize().x - closeW - 12);
+            vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
+            PushAccentButtonStyle(accent, 0.12, 0.50, vec4(0.85, 0.97, 1.00, 1.0), 0.28, 0.42);
+            if (UI::Button(Icons::Times + "  Close", vec2(closeW, UI::GetFrameHeight()))) {
+                g_ShowSettings = false;
+            }
+            PopAccentButtonStyle();
+        }
+        UI::End();
+        PopTheme();
+    }
+
+    void RenderGeneralTab() {
             int keyFlags = UI::InputTextFlags::Password;
 
             DrawSectionHeader("PROVIDER", Icons::Plug);
@@ -1902,23 +1949,56 @@ namespace AgentUI {
                 "Compact Button At", AgentSettings::S_CompactButtonThreshold, 4000, 1000000, "%d tok"
             );
             if (UI::IsItemHovered()) UI::SetTooltip("Compact button appears in the toolbar once used context crosses this.");
+    }
 
-            UI::Dummy(vec2(0, 6));
-            UI::Separator();
-            UI::Dummy(vec2(0, 4));
+    // One lifetime-stats row: dim label left, cyan value right.
+    void DrawStatRow(const string &in label, const string &in value) {
+        UI::PushStyleColor(UI::Col::Text, vec4(0.40, 0.45, 0.52, 1.0));
+        UI::Text(label);
+        UI::PopStyleColor();
+        UI::SameLine(150);
+        UI::PushStyleColor(UI::Col::Text, vec4(0.00, 0.82, 0.95, 0.9));
+        UI::Text(value);
+        UI::PopStyleColor();
+    }
 
-            // Right-align the close button so it anchors the window corner.
-            float closeW = UI::MeasureString(Icons::Times + "  Close").x + 20;
-            UI::SetCursorPosX(UI::GetWindowSize().x - closeW - 12);
-            vec4 accent = vec4(0.00, 0.82, 0.95, 1.0);
-            PushAccentButtonStyle(accent, 0.12, 0.50, vec4(0.85, 0.97, 1.00, 1.0), 0.28, 0.42);
-            if (UI::Button(Icons::Times + "  Close", vec2(closeW, UI::GetFrameHeight()))) {
-                g_ShowSettings = false;
+    void RenderStatsTab() {
+            DrawSectionHeader("LIFETIME TOTALS", Icons::Database);
+            DrawStatRow("Input tokens", FormatTokenCount(AgentStats::S_TotalInputTokens));
+            DrawStatRow("Cached read tokens", FormatTokenCount(AgentStats::S_TotalCachedReadTokens));
+            DrawStatRow("Cache write tokens", FormatTokenCount(AgentStats::S_TotalCacheWriteTokens));
+            DrawStatRow("Output tokens", FormatTokenCount(AgentStats::S_TotalOutputTokens));
+            DrawStatRow("User messages", "" + AgentStats::S_TotalUserMessages);
+            DrawStatRow("Turns", "" + AgentStats::S_TotalTurns);
+            DrawStatRow("Steps", "" + AgentStats::S_TotalSteps);
+            DrawStatRow("Blocks placed", "" + AgentStats::S_TotalBlocksPlaced);
+            DrawStatRow("Blocks removed", "" + AgentStats::S_TotalBlocksRemoved);
+
+            UI::Dummy(vec2(0, 8));
+            DrawSectionHeader("DANGER ZONE", Icons::ExclamationTriangle);
+            if (!g_StatsResetArmed) {
+                vec4 red = vec4(0.90, 0.25, 0.20, 1.0);
+                PushAccentButtonStyle(red, 0.10, 0.45, vec4(1.00, 0.72, 0.68, 1.0), 0.24, 0.36);
+                if (UI::Button(Icons::Times + "  Reset lifetime stats##statsreset")) {
+                    g_StatsResetArmed = true;
+                }
+                PopAccentButtonStyle();
+                if (UI::IsItemHovered()) UI::SetTooltip("Zeroes all persisted lifetime counters (tokens, messages, blocks).");
+            } else {
+                vec4 redHot = vec4(0.95, 0.20, 0.15, 1.0);
+                PushAccentButtonStyle(redHot, 0.35, 0.80, vec4(1.00, 0.92, 0.90, 1.0), 0.50, 0.65);
+                if (UI::Button(Icons::ExclamationTriangle + "  Click again to confirm##statsreset")) {
+                    AgentStats::ResetAll();
+                    g_StatsResetArmed = false;
+                }
+                PopAccentButtonStyle();
+                if (UI::IsItemHovered()) UI::SetTooltip("This cannot be undone.");
+                UI::SameLine(0, 10);
+                UI::AlignTextToFramePadding();
+                UI::PushStyleColor(UI::Col::Text, vec4(0.40, 0.45, 0.52, 1.0));
+                UI::Text("(resets on tab switch)");
+                UI::PopStyleColor();
             }
-            PopAccentButtonStyle();
-        }
-        UI::End();
-        PopTheme();
     }
 
     bool SendMessage(const string &in text) {
