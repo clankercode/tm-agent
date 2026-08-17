@@ -838,7 +838,11 @@ namespace AgentUnitTests {
 
     // AgentStats settings persist the user's real lifetime totals: snapshot,
     // mutate, restore (codebase test convention — no finally in AS).
+    // The suite runs with recording suspended (test mode); tests that verify
+    // accumulation itself resume recording for their duration and re-suspend
+    // before returning so the suite guard stays engaged.
     void Test_LifetimeStats_CachedInputAccumulates() {
+        AgentStats::ResumeRecording();
         int snapIn = AgentStats::S_TotalInputTokens;
         int snapOut = AgentStats::S_TotalOutputTokens;
         int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
@@ -854,11 +858,13 @@ namespace AgentUnitTests {
         AgentStats::S_TotalOutputTokens = snapOut;
         AgentStats::S_TotalCachedReadTokens = snapCachedRead;
         AgentStats::S_TotalCacheWriteTokens = snapCacheWrite;
+        AgentStats::SuspendRecording();
     }
 
     void Test_LifetimeStats_ResetAllZeroesEverything() {
         // The Stats settings tab's confirm-reset must zero every persisted
         // lifetime counter (snapshot/restore convention: no finally in AS).
+        AgentStats::ResumeRecording();
         int snapIn = AgentStats::S_TotalInputTokens;
         int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
         int snapCacheWrite = AgentStats::S_TotalCacheWriteTokens;
@@ -894,9 +900,54 @@ namespace AgentUnitTests {
         AgentStats::S_TotalSteps = snapSteps;
         AgentStats::S_TotalBlocksPlaced = snapPlaced;
         AgentStats::S_TotalBlocksRemoved = snapRemoved;
+        AgentStats::SuspendRecording();
+    }
+
+    void Test_LifetimeStats_SuspendedRecordingIsNoOp() {
+        // Test mode / DEV session fixtures suspend recording so persisted
+        // counters never move: every Record* AND ResetAll must be a no-op
+        // while suspended, and resume must re-enable recording.
+        int snapIn = AgentStats::S_TotalInputTokens;
+        int snapOut = AgentStats::S_TotalOutputTokens;
+        int snapMsgs = AgentStats::S_TotalUserMessages;
+        int snapSteps = AgentStats::S_TotalSteps;
+        int snapPlaced = AgentStats::S_TotalBlocksPlaced;
+        int snapRemoved = AgentStats::S_TotalBlocksRemoved;
+
+        AgentStats::SuspendRecording();
+        Assert(AgentStats::RecordingSuspended(), "suspended latch engaged");
+        AgentStats::RecordTokens(500, 50, 400, 20);
+        AgentStats::RecordUserMessage();
+        AgentStats::RecordStep();
+        AgentStats::RecordBlockPlaced();
+        AgentStats::RecordBlockRemoved();
+        AgentStats::ResetAll(); // must NOT zero while suspended
+        Assert(AgentStats::S_TotalInputTokens == snapIn, "suspended: input unchanged");
+        Assert(AgentStats::S_TotalOutputTokens == snapOut, "suspended: output unchanged");
+        Assert(AgentStats::S_TotalUserMessages == snapMsgs, "suspended: user msgs unchanged");
+        Assert(AgentStats::S_TotalSteps == snapSteps, "suspended: steps unchanged");
+        Assert(AgentStats::S_TotalBlocksPlaced == snapPlaced, "suspended: placed unchanged");
+        Assert(AgentStats::S_TotalBlocksRemoved == snapRemoved, "suspended: removed unchanged");
+
+        // Nested suspend: one resume is not enough to re-enable.
+        AgentStats::SuspendRecording();
+        AgentStats::ResumeRecording();
+        Assert(AgentStats::RecordingSuspended(), "nested suspend still suspended after one resume");
+        AgentStats::RecordTokens(10, 1);
+        Assert(AgentStats::S_TotalInputTokens == snapIn, "nested suspend: still no-op");
+
+        // The accumulate-after-resume path is covered by the sibling tests
+        // (they resume explicitly). This test stays depth-neutral: two
+        // suspends taken above are released here, leaving the suite-level
+        // guard exactly as it was found.
+        AgentStats::ResumeRecording();
+        AgentStats::ResumeRecording();
+        AgentStats::S_TotalInputTokens = snapIn;
+        AgentStats::S_TotalOutputTokens = snapOut;
     }
 
     void Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit() {
+        AgentStats::ResumeRecording();
         int snapIn = AgentStats::S_TotalInputTokens;
         int snapCachedRead = AgentStats::S_TotalCachedReadTokens;
         int snapCacheWrite = AgentStats::S_TotalCacheWriteTokens;
@@ -914,6 +965,7 @@ namespace AgentUnitTests {
         AgentStats::S_TotalCachedReadTokens = snapCachedRead;
         AgentStats::S_TotalCacheWriteTokens = snapCacheWrite;
         AgentUI::g_RunningOutputTokens = snapRunningOut;
+        AgentStats::SuspendRecording();
     }
 
     // --- startup suggestion --------------------------------------------------
@@ -1069,6 +1121,7 @@ namespace AgentUnitTests {
         RegisterUnitTest("tool focus location result pos extracts", Test_ToolFocus_LocationResultPosExtracts);
         RegisterUnitTest("lifetime stats cached input accumulates", Test_LifetimeStats_CachedInputAccumulates);
         RegisterUnitTest("lifetime stats reset all zeroes everything", Test_LifetimeStats_ResetAllZeroesEverything);
+        RegisterUnitTest("lifetime stats suspended recording is no-op", Test_LifetimeStats_SuspendedRecordingIsNoOp);
         RegisterUnitTest("lifetime stats update token stats feeds cache split", Test_LifetimeStats_UpdateTokenStatsFeedsCacheSplit);
         RegisterUnitTest("startup suggestion prompt variants", Test_StartupSuggestion_PromptVariants);
         RegisterUnitTest("startup suggestion should show", Test_StartupSuggestion_ShouldShow);

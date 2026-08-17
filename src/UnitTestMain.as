@@ -44,6 +44,10 @@ namespace AgentUnitTests {
             yield();
         }
         sleep(25);
+        // Test mode: freeze lifetime stats for the whole suite — tests call
+        // Record* incidentally and those counters are persisted [Setting]s
+        // (writes hit the user's disk). Suspended for the suite duration.
+        AgentStats::SuspendRecording();
         while (g_Counter > g_Done) {
             if (g_Running < 10) {
                 startnew(UnitTest_RunNext);
