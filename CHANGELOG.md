@@ -6,8 +6,14 @@ Versions follow `info.toml` `[meta] version`.
 
 ## [Unreleased]
 
+### Changed
+
+- Chat render path no longer rebuilds context-token stats twice per frame. `LlmHistory::GetCachedContextStats` recomputes only when history, editor-state, or provider/model/effort actually change (measured: ~100 ms/frame → ~1.8 ms on a 201-message session).
+
 ### Added
 
+- DEV render profiler (`RenderPerf`): per-section rolling averages every 3s in the Openplanet log. Driver ops `renderperf_reset` / `get_renderperf` (includes stats-cache hit/miss counters).
+- DEV session-fixture replay: driver op `load_session` incrementally replays a SessionLog JSONL into the live chat (12 records/frame) so render/perf can be measured against a real conversation without hanging the game. `load_session_status` reports progress. Lifetime stats stay frozen during replay.
 - Token details now shows the prompt-cache split. The per-request row gains a `Cache` stat (`128r` cached-read, `+40w` cache-write; hidden while the provider reports none) with a hover tooltip breaking down cached-read vs cache-write vs fresh input. The LIFETIME row gains a matching `Cached` stat — lifetime input tokens served from or written to the prompt cache — with the same hover breakdown, hidden until the first cache activity is ever recorded. Lifetime counters are persisted like the other lifetime stats, and `get_token_stats` reports the split (per-request and lifetime) for scripted verification.
 - Startup suggestion: the empty-chat TRY list now includes a map-aware scenery sampler (fills the long 4–8 island prompt, does not auto-send) and "Check all checkpoints for double respawnability."
 - Agent tool pack (`tm-agent.AskUser`, `tm-agent.OfferActions`): non-blocking surveys in the chatlog (multi-select + Submit, pop-out for >6 options, free-text always valid) and grouped view/continue action buttons.

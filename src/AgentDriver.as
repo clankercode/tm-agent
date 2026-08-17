@@ -140,6 +140,7 @@ namespace AgentDriver {
             resp["ok"] = true;
             return resp;
         }
+#if DEV
         if (op == "load_session") {
             // DEV fixture: incrementally replay a SessionLog JSONL into the
             // live chat so render/perf can be measured against a real
@@ -172,6 +173,7 @@ namespace AgentDriver {
             resp["error"] = SessionReplay::g_Error;
             return resp;
         }
+#endif
         if (op == "open_settings") {
             AgentUI::g_ShowSettings = true;
             resp["ok"] = true;
