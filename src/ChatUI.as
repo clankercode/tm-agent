@@ -135,6 +135,9 @@ namespace AgentUI {
     }
 
     array<Message@> g_Messages;
+    // Last-frame message cull counts (diagnostics / driver verification).
+    int g_LastDrawnCount = 0;
+    int g_LastCulledCount = 0;
 
 
     void DrawColoredText(const vec4 &in color, const string &in text) {
@@ -184,7 +187,9 @@ namespace AgentUI {
 
     void DrawContextStats() {
         Json::Value@ tools = ToolAssembler::GetToolList();
-        Json::Value@ stats = LlmHistory::BuildContextStats(tools, AgentSettings::S_MaxHistoryTokens);
+        RenderPerf::Mark("ctx.toollist");
+        Json::Value@ stats = LlmHistory::GetCachedContextStats(tools, AgentSettings::S_MaxHistoryTokens);
+        RenderPerf::Mark("ctx.stats");
 
         int maxTokens = AgentSettings::S_MaxHistoryTokens;
         int usedTokens = int(stats["estimatedTotalTokens"]);
@@ -476,6 +481,7 @@ namespace AgentUI {
 
     void Render() {
         if (!AgentSettings::S_ShowWindow) return;
+        RenderPerf::Tick();
 
         UI::SetNextWindowSize(int(g_WindowWidth), int(g_WindowHeight), UI::Cond::FirstUseEver);
         UI::SetNextWindowPos(int(g_WindowPos.x), int(g_WindowPos.y), UI::Cond::FirstUseEver);
@@ -492,11 +498,16 @@ namespace AgentUI {
                 DrawNotInEditor();
             } else {
                 DrawHeader();
+                RenderPerf::Mark("header");
                 DrawContextStats();
+                RenderPerf::Mark("ctxstats");
                 UI::Separator();
                 DrawMessages();
+                RenderPerf::Mark("messages");
                 DrawInput();
+                RenderPerf::Mark("input");
                 DrawBottomToolbar();
+                RenderPerf::Mark("toolbar");
             }
 
             auto winSize = UI::GetWindowSize();
@@ -518,7 +529,9 @@ namespace AgentUI {
 
         if (g_ShowSettings) {
             RenderSettingsWindow();
+            RenderPerf::Mark("settings");
         }
+        RenderPerf::Flush();
     }
 
     void DrawCustomTitleBar() {
@@ -989,6 +1002,7 @@ namespace AgentUI {
             float viewTop = scrollY - viewH;
             float viewBot = scrollY + viewH * 2.0;
             float availW = UI::GetContentRegionAvail().x;
+            uint culled = 0, drawn = 0;
 
             for (uint i = 0; i < g_Messages.Length; i++) {
                 auto @msg = g_Messages[i];
@@ -1012,6 +1026,7 @@ namespace AgentUI {
                     && (preY + msg.cachedHeight < viewTop || preY > viewBot);
 
                 if (offScreen) {
+                    culled++;
                     // Reproduce the exact cursor advance without invoking
                     // any layout or drawlist work for this message.
                     // A bare SetCursorPos here trips ImGui's
@@ -1028,6 +1043,7 @@ namespace AgentUI {
                         : 0;
                     UI::Dummy(vec2(0, advance));
                 } else {
+                    drawn++;
                     if (tightBottom) UI::PushStyleVar(UI::StyleVar::ItemSpacing, vec2(UI::GetStyleVarVec2(UI::StyleVar::ItemSpacing).x, 0));
                     DrawMessage(msg, tightTop, tightBottom);
                     if (tightBottom) UI::PopStyleVar();
@@ -1038,6 +1054,9 @@ namespace AgentUI {
                     msg.cachedExpanded = msg.expanded;
                 }
             }
+            g_LastDrawnCount = int(drawn);
+            g_LastCulledCount = int(culled);
+            RenderPerf::Mark("messages");
             if (g_PendingScrollBottom) {
                 UI::SetScrollHereY(1.0f);
                 g_PendingScrollBottom = false;
@@ -1609,7 +1628,9 @@ namespace AgentUI {
         UI::Dummy(vec2(0, 4));
 
         Json::Value@ tools = ToolAssembler::GetToolList();
-        Json::Value@ stats = LlmHistory::BuildContextStats(tools, AgentSettings::S_MaxHistoryTokens);
+        RenderPerf::Mark("tb.toollist");
+        Json::Value@ stats = LlmHistory::GetCachedContextStats(tools, AgentSettings::S_MaxHistoryTokens);
+        RenderPerf::Mark("tb.stats");
         int usedTokens = int(stats["estimatedTotalTokens"]);
         bool showCompact = usedTokens >= AgentSettings::S_CompactButtonThreshold;
 

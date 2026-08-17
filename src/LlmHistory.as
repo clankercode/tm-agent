@@ -4,6 +4,27 @@ namespace LlmHistory {
     uint g_LastCompactionAt = 0;
     int g_CompactionCount = 0;
 
+    // Cheap fingerprint of everything that feeds BuildContextStats. Incremented
+    // at every mutation site so the stats cache (below) can skip the expensive
+    // full-history JSON serialize on frames where nothing changed.
+    uint g_StatsFingerprint = 0;
+    void TouchStatsFingerprint() { g_StatsFingerprint++; }
+
+    // Stats cache — BuildContextStats serializes the entire history to JSON
+    // several times (per-message token counts + the full request body) which
+    // costs ~6ms per call at 150k tokens. The chat UI used to call it twice
+    // per frame; now it's computed once and reused until the fingerprint or
+    // the editor-state snapshot changes.
+    Json::Value@ g_StatsCache = null;
+    uint g_StatsCacheFingerprint = 0;
+    string g_StatsCacheEditorState = "";
+    int g_StatsCacheMaxTokens = -1;
+    string g_StatsCacheProviderModel = "";
+    // Diagnostics: cache effectiveness + worst observed rebuild cost.
+    uint g_StatsCacheHits = 0;
+    uint g_StatsCacheMisses = 0;
+    uint g_StatsCacheWorstMs = 0;
+
     const string BASE_SYSTEM_PROMPT =
         "You are an expert Trackmania map editor agent. You have access to tools to view and modify the current map, control menus and the camera, and inspect game state.\n\n"
         + "IMPORTANT:\n"
@@ -52,6 +73,7 @@ namespace LlmHistory {
 
     void AddUserMessage(const string &in content) {
         g_Messages.InsertLast(AiApi::NewMessage("user", content));
+        TouchStatsFingerprint();
     }
 
     // Screenshot follow-up: a user message whose content is a text+image_url
@@ -59,6 +81,7 @@ namespace LlmHistory {
     void AddImageUserMessage(const string &in caption, const string &in mediaType, const string &in base64) {
         Json::Value@ msg = ToolImages::BuildImageUserMessage(caption, mediaType, base64);
         g_Messages.InsertLast(msg);
+        TouchStatsFingerprint();
     }
 
     void AddAssistantMessage(const string &in content, Json::Value@ reasoningItems = null) {
@@ -67,6 +90,7 @@ namespace LlmHistory {
             msg["reasoning_items"] = reasoningItems;
         }
         g_Messages.InsertLast(msg);
+        TouchStatsFingerprint();
     }
 
     void AddAssistantToolCalls(const string &in content, const array<Json::Value@> &in toolCalls, Json::Value@ reasoningItems = null) {
@@ -82,6 +106,7 @@ namespace LlmHistory {
             msg["reasoning_items"] = reasoningItems;
         }
         g_Messages.InsertLast(msg);
+        TouchStatsFingerprint();
     }
 
     void AddToolResult(const string &in toolCallId, const string &in toolName, const string &in resultJson) {
@@ -95,6 +120,7 @@ namespace LlmHistory {
         toolResult["result"] = Json::Parse(resultJson);
         msg["tool_result"] = toolResult;
         g_Messages.InsertLast(msg);
+        TouchStatsFingerprint();
     }
 
     // True when any history message still carries an image part.
@@ -113,6 +139,7 @@ namespace LlmHistory {
         g_CompactedSummary = "";
         g_LastCompactionAt = 0;
         g_CompactionCount = 0;
+        TouchStatsFingerprint();
     }
 
     // Recovery for text-only models: downgrades every image user message to
@@ -138,6 +165,7 @@ namespace LlmHistory {
             msg.Remove("image_part");
             removed++;
         }
+        if (removed > 0) TouchStatsFingerprint();
         return removed;
     }
 
@@ -433,6 +461,39 @@ namespace LlmHistory {
         return chunk.Trim();
     }
 
+    // Cached wrapper for per-frame UI consumers. The expensive work is
+    // serialized-history token counting + one full request-body build, which
+    // scales with total history size (~6ms per call at 150k tokens). History
+    // only changes on message add/clear/compact (fingerprint), the editor
+    // state snapshot has its own 5s TTL, and provider/model/effort are in the
+    // key so switching models rebuilds. Everything else reuses the cache.
+    Json::Value@ GetCachedContextStats(Json::Value@ tools, int maxTokens) {
+        uint t0 = Time::Now;
+        string editorState = ToolAssembler::GetEditorStateSnapshot();
+        RenderPerf::Mark("stats.edstate");
+        string providerModel = "" + int(AgentSettings::S_Provider) + "|"
+            + AgentSettings::CurrentModel() + "|" + AgentSettings::CurrentReasoningEffort();
+        bool hit = g_StatsCache !is null
+            && g_StatsCacheFingerprint == g_StatsFingerprint
+            && g_StatsCacheEditorState == editorState
+            && g_StatsCacheMaxTokens == maxTokens
+            && g_StatsCacheProviderModel == providerModel;
+        if (hit) {
+            g_StatsCacheHits++;
+            return g_StatsCache;
+        }
+
+        g_StatsCacheMisses++;
+        @g_StatsCache = BuildContextStats(tools, maxTokens);
+        g_StatsCacheFingerprint = g_StatsFingerprint;
+        g_StatsCacheEditorState = editorState;
+        g_StatsCacheMaxTokens = maxTokens;
+        g_StatsCacheProviderModel = providerModel;
+        uint rebuildMs = Time::Now - t0;
+        if (rebuildMs > g_StatsCacheWorstMs) g_StatsCacheWorstMs = rebuildMs;
+        return g_StatsCache;
+    }
+
     Json::Value@ BuildContextStats(Json::Value@ tools, int maxTokens) {
         Json::Value stats = Json::Object();
         string editorState = BoundEditorStateForBudget(tools, maxTokens, ToolAssembler::GetEditorStateSnapshot());
@@ -503,6 +564,7 @@ namespace LlmHistory {
             g_LastCompactionAt = Time::Now;
             g_CompactionCount++;
             BoundSummaryToFit(tools, maxTokens, editorState);
+            TouchStatsFingerprint();
         }
 
         BoundSummaryToFit(tools, maxTokens, editorState);

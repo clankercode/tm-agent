@@ -140,6 +140,38 @@ namespace AgentDriver {
             resp["ok"] = true;
             return resp;
         }
+        if (op == "load_session") {
+            // DEV fixture: incrementally replay a SessionLog JSONL into the
+            // live chat so render/perf can be measured against a real
+            // conversation. Returns immediately; poll get_state for progress.
+            string file = req.HasKey("file") ? string(req["file"]) : "";
+            if (file.Length == 0) { resp["ok"] = false; resp["error"] = "file required"; return resp; }
+            // Bare filename resolves against the sessions folder; absolute
+            // paths are used as-is.
+            if (file.IndexOf("/") < 0 && file.IndexOf("\\") < 0) {
+                file = IO::FromStorageFolder("sessions") + "/" + file;
+            }
+            if (!SessionReplay::BeginLoad(file)) {
+                resp["ok"] = false;
+                resp["error"] = SessionReplay::g_Error;
+                return resp;
+            }
+            startnew(CoroutineFunc(SessionReplay::RunLoad));
+            resp["ok"] = true;
+            resp["loading"] = true;
+            resp["total"] = SessionReplay::g_Total;
+            return resp;
+        }
+        if (op == "load_session_status") {
+            resp["ok"] = true;
+            resp["loading"] = SessionReplay::g_Loading;
+            resp["applied"] = SessionReplay::g_Applied;
+            resp["total"] = SessionReplay::g_Total;
+            resp["messageCount"] = int(AgentUI::g_Messages.Length);
+            resp["historyCount"] = int(LlmHistory::g_Messages.Length);
+            resp["error"] = SessionReplay::g_Error;
+            return resp;
+        }
         if (op == "open_settings") {
             AgentUI::g_ShowSettings = true;
             resp["ok"] = true;
@@ -395,6 +427,22 @@ namespace AgentDriver {
             }
             resp["ok"] = true;
             resp["messages"] = arr;
+            return resp;
+        }
+        if (op == "renderperf_reset") {
+            RenderPerf::Reset();
+            resp["ok"] = true;
+            return resp;
+        }
+        if (op == "get_renderperf") {
+            resp["ok"] = true;
+            resp["enabled"] = RenderPerf::g_Enabled;
+            resp["drawnMsgs"] = AgentUI::g_LastDrawnCount;
+            resp["culledMsgs"] = AgentUI::g_LastCulledCount;
+            resp["msgTotal"] = int(AgentUI::g_Messages.Length);
+            resp["statsHits"] = int(LlmHistory::g_StatsCacheHits);
+            resp["statsMisses"] = int(LlmHistory::g_StatsCacheMisses);
+            resp["statsWorstMs"] = int(LlmHistory::g_StatsCacheWorstMs);
             return resp;
         }
         if (op == "get_token_stats") {

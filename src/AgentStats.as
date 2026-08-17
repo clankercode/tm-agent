@@ -26,21 +26,22 @@ namespace AgentStats {
     [Setting category="Stats" name="Total blocks removed" hidden]
     int S_TotalBlocksRemoved = 0;
 
-    // Test-mode suspend latch: while >0, every Record* and ResetAll is a
-    // no-op so unit tests and DEV session fixtures never touch the user's
-    // persisted lifetime counters (they are Openplanet [Setting]s — writes
-    // hit disk). Depth-counted so nested suspends unwind correctly.
-    int g_SuspendCount = 0;
-
-    void SuspendRecording() { g_SuspendCount++; }
-    void ResumeRecording() { if (g_SuspendCount > 0) g_SuspendCount--; }
-    bool RecordingSuspended() { return g_SuspendCount > 0; }
+    // When >0, all Record* methods (and ResetAll) are no-ops. SessionReplay
+    // suspends recording while replaying a fixture so llm_exchange token
+    // feeds and incidental Record* calls never pollute the user's persisted
+    // lifetime counters; the UNITTEST suite holds a suspend for its whole
+    // run for the same reason (tests call Record* incidentally). Counter
+    // (not bool) so nested suspend/resume pairs stay balanced.
+    int g_RecordingSuspends = 0;
+    void SuspendRecording() { g_RecordingSuspends++; }
+    void ResumeRecording() { if (g_RecordingSuspends > 0) g_RecordingSuspends--; }
+    bool RecordingSuspended() { return g_RecordingSuspends > 0; }
 
     // cachedRead/cacheWrite are the prompt-cache split of the request's input
     // tokens (ai-api normalizes both provider shapes). Defaulted so existing
     // two-arg callers keep compiling.
     void RecordTokens(int inTok, int outTok, int cachedRead = 0, int cacheWrite = 0) {
-        if (g_SuspendCount > 0) return;
+        if (RecordingSuspended()) return;
         if (inTok > 0) S_TotalInputTokens += inTok;
         if (outTok > 0) S_TotalOutputTokens += outTok;
         if (cachedRead > 0) S_TotalCachedReadTokens += cachedRead;
@@ -48,17 +49,17 @@ namespace AgentStats {
     }
 
     void RecordUserMessage() {
-        if (g_SuspendCount > 0) return;
+        if (RecordingSuspended()) return;
         S_TotalUserMessages++;
         S_TotalTurns++;
     }
 
-    void RecordStep() { if (g_SuspendCount > 0) return; S_TotalSteps++; }
-    void RecordBlockPlaced() { if (g_SuspendCount > 0) return; S_TotalBlocksPlaced++; }
-    void RecordBlockRemoved() { if (g_SuspendCount > 0) return; S_TotalBlocksRemoved++; }
+    void RecordStep() { if (RecordingSuspended()) return; S_TotalSteps++; }
+    void RecordBlockPlaced() { if (RecordingSuspended()) return; S_TotalBlocksPlaced++; }
+    void RecordBlockRemoved() { if (RecordingSuspended()) return; S_TotalBlocksRemoved++; }
 
     void ResetAll() {
-        if (g_SuspendCount > 0) return;
+        if (RecordingSuspended()) return;
         S_TotalInputTokens = 0;
         S_TotalCachedReadTokens = 0;
         S_TotalCacheWriteTokens = 0;
